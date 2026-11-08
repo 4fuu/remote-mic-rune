@@ -1,0 +1,45 @@
+[package]
+name = "rc-helper"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Elevated helper for remote-mic-rune: locates the RC003's WUDFHost.exe, injects rc-agent.dll, owns the lease, and bridges agent <-> app."
+
+[[bin]]
+name = "rc-helper"
+path = "src/main.rs"
+
+[features]
+default = []
+console = []
+
+[dependencies]
+rc-protocol = { path = "../rc-protocol" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_System_Memory",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Diagnostics_ToolHelp",
+    # WriteProcessMemory lives in the Debug namespace in windows-rs.
+    "Win32_System_Diagnostics_Debug",
+    # ReadFile/WriteFile/ConnectNamedPipe take OVERLAPPED pointers.
+    "Win32_System_IO",
+    "Win32_Storage_FileSystem",
+    "Win32_Security",
+    # ConvertStringSecurityDescriptorToSecurityDescriptorW.
+    "Win32_Security_Authorization",
+    "Win32_System_SystemInformation",
+    "Win32_UI_Shell",
+    # Named-pipe transport (CreateNamedPipeW / ConnectNamedPipe / WaitNamedPipeW).
+    "Win32_System_Pipes",
+    # SetConsoleCtrlHandler for clean Ctrl+C teardown.
+    "Win32_System_Console",
+]

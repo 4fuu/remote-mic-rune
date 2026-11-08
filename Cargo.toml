@@ -5,6 +5,7 @@ members = [
     "crates/rc-agent",
     "crates/rc-bridge",
     "crates/rc-mapping",
+    "crates/rc-helper",
 ]
 
 [workspace.package]
