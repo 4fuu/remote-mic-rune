@@ -45,6 +45,9 @@ pub fn swiftui_kit(dark: bool) -> Kit {
     k.c.bg_accent = tint;
     k.c.border_focus = tint;
     k.c.border_active = tint;
+    // Submit's filled skin paints from this token (actions.rs); the neutral
+    // theme makes it near-black, and SwiftUI's prominent button is the tint.
+    k.c.bg_icon_button_contrast = tint;
     k.radius.xs = 4.0;
     k.radius.sm = 6.0;
     k.radius.md = 10.0;
@@ -243,7 +246,8 @@ fn group_header(title: &str, k: &Kit) -> El {
         .pl(16.0)
 }
 
-/// Footnote caption below a card (SwiftUI section footer).
+/// Footnote caption below a card (SwiftUI section footer). The bottom
+/// padding keeps air between a footer and the next section header.
 fn group_footer(footer: &str, k: &Kit) -> El {
     text(footer.to_string())
         .wrap()
@@ -251,6 +255,7 @@ fn group_footer(footer: &str, k: &Kit) -> El {
         .color(k.c.text_faint)
         .pl(16.0)
         .pr(16.0)
+        .pb(space::S2)
 }
 
 /// A scrollable form body: title, caption, then cards.
@@ -346,19 +351,58 @@ fn status_section(s: &AppState, k: &Kit) -> El {
             ),
         ],
     );
-    form(
-        "status",
-        "Status",
-        "",
-        k,
-        vec![
-            group_header("Link", k),
-            link,
-            group_header("Capture", k),
-            capture,
-            group_footer("Counters update every 500 ms from the bridge snapshot.", k),
-        ],
-    )
+    let mut children = vec![group_header("Link", k), link, group_header("Capture", k), capture];
+    // Before the bridge is connected the numbers above barely move; fill the
+    // rest of the screen with the three setup steps instead of empty space.
+    if s.bridge.phase != BridgePhase::Connected {
+        children.push(group_header("Getting started", k));
+        children.push(getting_started_card(k));
+    }
+    children.push(group_footer("Counters update every 500 ms from the bridge snapshot.", k));
+    form("status", "Status", "", k, children)
+}
+
+/// The idle Status screen's next-steps card: one numbered row per setup
+/// step. Footnote-sized and tint-quiet, so it reads as guidance, not content.
+fn getting_started_card(k: &Kit) -> El {
+    let steps = [
+        "Install the helper, then start it — Helper tab.",
+        "Map what each button press does — Buttons tab.",
+        "Turn on enhanced capture — Capture tab.",
+    ];
+    let rows = steps
+        .iter()
+        .enumerate()
+        .map(|(i, step)| {
+            row()
+                .key(format!("getting-started-step-{}", i + 1))
+                .w_full()
+                .center_y()
+                .gap(space::S2)
+                .px(16.0)
+                .py(space::S2)
+                .child(
+                    el()
+                        .size(18.0, 18.0)
+                        .center()
+                        .radius(9.0)
+                        .fill(k.alpha(k.c.bg_accent, 0.12))
+                        .child(
+                            text((i + 1).to_string())
+                                .font(TextStyle::new(11.0, 600.0))
+                                .color(k.c.text_accent),
+                        ),
+                )
+                .child(
+                    text(step.to_string())
+                        .wrap()
+                        .grow(1.0)
+                        .font(FOOTNOTE)
+                        .color(k.c.text_muted),
+                )
+        })
+        .collect();
+    group("getting-started", k, rows)
 }
 
 fn capture_section(s: &AppState, k: &Kit, layer: &mut Vec<El>) -> El {
@@ -490,8 +534,7 @@ fn button_card(s: &AppState, button: RemoteButton, k: &Kit, layer: &mut Vec<El>)
             .center_y()
             .gap(space::S2)
             .px(16.0)
-            .pt(space::S3)
-            .pb(space::S2)
+            .py(space::S3)
             .child(dot(if pressed { k.c.bg_accent } else { k.c.text_faint }))
             .child(
                 text(button.name().to_string())
@@ -525,7 +568,7 @@ fn button_card(s: &AppState, button: RemoteButton, k: &Kit, layer: &mut Vec<El>)
                 .center_y()
                 .gap(space::S3)
                 .px(16.0)
-                .py(space::S2)
+                .py(space::S3)
                 .child(
                     text(slot.caption().to_string())
                         .grow(1.0)
@@ -612,16 +655,22 @@ fn buttons_section(s: &AppState, k: &Kit, layer: &mut Vec<El>) -> El {
             .font(type_::BODY)
             .color(k.c.text_muted),
     ];
-    // Always-captured buttons first: they are the ones that do nothing
-    // without this app, so they read as the primary content.
+    // Always-captured buttons first, under their own header: they are the
+    // ones that do nothing without this app, so they read as the primary
+    // content, and the headers explain the order.
     let always: Vec<RemoteButton> = ALWAYS_CAPTURED_BUTTONS.to_vec();
-    let ordered: Vec<RemoteButton> = always
+    let rest: Vec<RemoteButton> = ALL_BUTTONS
         .iter()
         .copied()
-        .chain(ALL_BUTTONS.iter().copied().filter(|b| !always.contains(b)))
+        .filter(|b| !always.contains(b))
         .collect();
-    for button in ordered {
-        children.push(button_card(s, button, k, layer));
+    children.push(group_header("Always captured", k));
+    for button in &always {
+        children.push(button_card(s, *button, k, layer));
+    }
+    children.push(group_header("Captured when mapped", k));
+    for button in &rest {
+        children.push(button_card(s, *button, k, layer));
     }
     form("buttons", "Buttons", "", k, children)
 }
@@ -668,6 +717,9 @@ fn helper_section(s: &AppState, k: &Kit) -> El {
                         .font(HEADLINE)
                         .color(k.c.text_base),
                 )
+                // Value first, action last: the row reads label → value →
+                // button, like a SwiftUI LabeledContent with a trailing action.
+                .child(text(status_line).key("helper-status").font(type_::BODY).color(k.c.text_muted))
                 .child(
                     Button::new("Check status")
                         .variant(ButtonVariant::Ghost)
@@ -675,8 +727,7 @@ fn helper_section(s: &AppState, k: &Kit) -> El {
                         .on_press(|s: &mut AppState| s.run_helper_command(HelperCommand::RefreshStatus))
                         .build(k)
                         .key("helper-refresh"),
-                )
-                .child(text(status_line).key("helper-status").font(type_::BODY).color(k.c.text_muted)),
+                ),
         ],
     );
 

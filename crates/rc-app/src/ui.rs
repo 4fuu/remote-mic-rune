@@ -722,6 +722,11 @@ mod tests {
         assert!(rt.find("section-tabs").is_some(), "section tabs render");
         assert!(rt.find("kv-phase-value").is_some(), "status section shows by default");
         assert!(rt.find("phase-badge").is_some(), "phase badge renders");
+        // Default bridge phase is Stopped, so the idle guidance card shows.
+        assert!(
+            rt.find("group-getting-started").is_some(),
+            "idle status shows the getting-started card"
+        );
     }
 
     #[test]
