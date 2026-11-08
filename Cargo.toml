@@ -2,6 +2,9 @@
 resolver = "2"
 members = [
     "crates/rc-protocol",
+    "crates/rc-agent",
+    "crates/rc-bridge",
+    "crates/rc-mapping",
 ]
 
 [workspace.package]
