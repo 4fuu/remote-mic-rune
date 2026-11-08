@@ -16,8 +16,8 @@ use crate::task::TaskStatus;
 
 /// The action picker's options (V1 editor). Media keys, shortcut and mouse
 /// clicks; `MouseMove`/`Scroll` actions can only arrive from hand-edited
-/// settings files and display under their own labels (see
-/// `ButtonAction::picker_label`).
+/// settings files and display under their own short labels (see
+/// `ButtonAction` matching in `action_short_label`).
 pub const PICKER_OPTIONS: [&str; 11] = [
     "Disabled",
     MediaKey::Mute.label(),
@@ -543,11 +543,11 @@ mod tests {
                 generation: 3,
                 ..BridgeStatus::default()
             };
-            // The Buttons mapping canvas is a tall fixed geometry: render it
-            // in a window tall enough to show the whole canvas (intro, the
-            // canvas itself, and the volume_mute card below it).
+            // The mapping canvas is fixed geometry: render it in a window
+            // tall enough to show the whole canvas (intro, the canvas itself,
+            // and the volume_mute card below it).
             let (win_w, win_h) = if section == Section::Buttons {
-                (780.0, crate::views::mapping_canvas_h(&state) + 400.0)
+                (780.0, crate::views::mapping_canvas_h(&state) + 290.0)
             } else {
                 (780.0, 720.0)
             };
@@ -823,6 +823,51 @@ mod tests {
             photo,
             canvas
         );
+        // Every leader line connects its card to the photo: the elbow's
+        // vertical segment stays inside the photo's band, the horizontal
+        // segment meets the card's center at its near edge, and its far end
+        // lands on the photo (see `leader_lines` in views.rs).
+        let [photo_x, photo_y, photo_w, photo_h] = photo;
+        for p in crate::views::PLACEMENTS.iter() {
+            let name = p.button.name();
+            let [_, vy, _, vh] = rt
+                .presented(&format!("line-v-{name}"))
+                .unwrap_or_else(|| panic!("vertical line for {name} renders"))
+                .0;
+            assert!(
+                vy >= photo_y - 0.5 && vy + vh <= photo_y + photo_h + 0.5,
+                "{name}'s leader line escapes the photo band: y {vy}..{} vs photo {}..{}",
+                vy + vh,
+                photo_y,
+                photo_y + photo_h
+            );
+            let [hx, hy, hw, _] = rt
+                .presented(&format!("line-h-{name}"))
+                .unwrap_or_else(|| panic!("horizontal line for {name} renders"))
+                .0;
+            let [cx, cy, cw, ch] = rt
+                .presented(&format!("row-{name}"))
+                .unwrap_or_else(|| panic!("card for {name} renders"))
+                .0;
+            assert!(
+                (hy - (cy + ch / 2.0)).abs() <= 1.0,
+                "{name}'s horizontal line misses the card's center line: {hy} vs {}",
+                cy + ch / 2.0
+            );
+            let near = if p.left { hx } else { hx + hw };
+            let far = if p.left { hx + hw } else { hx };
+            let card_edge = if p.left { cx + cw } else { cx };
+            assert!(
+                (near - card_edge).abs() <= 1.0,
+                "{name}'s horizontal line misses its card's near edge: {near} vs {card_edge}"
+            );
+            assert!(
+                far >= photo_x - 0.5 && far <= photo_x + photo_w + 0.5,
+                "{name}'s horizontal line ends off the photo: {far} vs {}..{}",
+                photo_x,
+                photo_x + photo_w
+            );
+        }
     }
 
     #[test]

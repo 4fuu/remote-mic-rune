@@ -14,13 +14,13 @@
 
 use rune::{Cx, El, ScrollSpec, TextStyle, Tx, col, el, oklch, row, text};
 use rune::tok::{radius, space, type_};
-use rune_kit::{Badge, BadgeVariant, Button, ButtonVariant, Kit, SegmentedControl, Select, Switch, TextInput, root};
+use rune_kit::{Badge, BadgeVariant, Button, ButtonVariant, Kit, SegmentedControl, Select, SelectAppearance, Switch, TextInput, root};
 
 use rc_protocol::{ALL_BUTTONS, RemoteButton};
 use rc_protocol::buttons::ALWAYS_CAPTURED_BUTTONS;
 
 use crate::bridge_api::{BridgePhase, BridgeStatus};
-use crate::mappings::Slot;
+use crate::mappings::{ButtonAction, MediaKey, MouseButton, Slot};
 use crate::task::TaskStatus;
 use crate::ui::{AppState, HelperCommand, PICKER_OPTIONS, Section, slot_key};
 
@@ -531,21 +531,38 @@ pub(crate) const CANVAS_BASE_W: f32 = 800.0;
 const PHOTO_W: f32 = 250.0;
 const PHOTO_H: f32 = 508.0;
 /// A mapping card's width at scale 1, and the leader-line thickness.
-const CARD_W: f32 = 280.0;
+const CARD_W: f32 = 330.0;
 const LINE_W: f32 = 1.5;
 /// Air the canvas height keeps between stacked cards and at its edges.
-const CANVAS_GAP: f32 = 12.0;
+const CANVAS_GAP: f32 = 10.0;
 const CANVAS_EDGE: f32 = 8.0;
-/// Height floor (the reference canvas' collapsed-card height); the computed
-/// height always exceeds it with expanded cards.
-const CANVAS_MIN_H: f32 = 1010.0;
+/// The reference canvas' height: the 508-pt photo fills all but a `PHOTO_BAND_Y`
+/// margin on each side, and the six compact rows per column span nearly the
+/// photo's whole band (see `PLACEMENTS`' `target_y` fractions).
+const CANVAS_MIN_H: f32 = 570.0;
+/// Air the canvas keeps above and below the photo. The photo tracks the
+/// canvas height (it keeps its `PHOTO_W`:`PHOTO_H` aspect), so at the design
+/// height it is exactly `PHOTO_W` × `PHOTO_H` and every card's target y sits
+/// inside the photo's band — leader lines stay attached to the remote at
+/// every window width, where a width-scaled photo would shrink away from the
+/// cards and leave their lines dangling in space.
+const PHOTO_BAND_Y: f32 = 31.0;
+/// Growth cap on the height-tracking photo: past ~1.2x the design size it
+/// would crowd the card columns, so canvas growth beyond that (a pile of
+/// shortcut drafts on edge cards) adds air above and below instead.
+const PHOTO_GROW_MAX: f32 = 1.2;
+/// The three gesture pickers' trigger width at scale 1.
+const PICK_W: f32 = 74.0;
 /// Card row metrics measured from the rendered kit (and asserted by the
-/// geometry test): header row, one gesture-slot row, one shortcut-draft row
-/// (divider included), and the card's hairline dividers between its rows.
-const CARD_HEAD_H: f32 = 40.25;
-const CARD_SLOT_H: f32 = 48.0;
+/// geometry test): the compact card's single row — the 28-pt pickers plus
+/// 14-pt vertical padding — and a shortcut-draft row (hairline divider
+/// above it, 28-pt field, 12-pt bottom padding) added while a shortcut
+/// draft exists for one of the button's slots. Horizontal metrics scale
+/// with the laid-out canvas, vertical ones stay fixed.
+const CARD_ROW_H: f32 = 56.0;
 const CARD_DRAFT_H: f32 = 41.0;
-const CARD_DIVIDERS: f32 = 3.0;
+const CARD_PAD_X: f32 = 12.0;
+const CARD_ROW_PY: f32 = 14.0;
 
 /// Where a button sits on the physical RC003 remote and where its card goes:
 /// `anchor` is the fractional (x, y) of the button inside the photo rect,
@@ -558,21 +575,26 @@ pub(crate) struct Placement {
     target_y: f32,
 }
 
-/// Every placed button, top to bottom per column. The 13th button,
-/// `volume_mute`, has no physical spot and renders below the canvas.
+/// Every placed button, top to bottom per column. Both columns share the
+/// same six evenly spaced fractions, spanning the photo's band: with the
+/// `PHOTO_BAND_Y` air, a card's target y times the canvas height always
+/// lands inside the photo's vertical range, so each leader line's vertical
+/// segment runs from its anchor to its card entirely across the photo. The
+/// 13th button, `volume_mute`, has no physical spot and renders below the
+/// canvas.
 pub(crate) static PLACEMENTS: [Placement; 12] = [
-    Placement { button: RemoteButton::Power, left: true, anchor: (0.386, 0.099), target_y: 0.08 },
-    Placement { button: RemoteButton::Up, left: true, anchor: (0.502, 0.179), target_y: 0.23 },
-    Placement { button: RemoteButton::Left, left: true, anchor: (0.362, 0.246), target_y: 0.38 },
-    Placement { button: RemoteButton::Back, left: true, anchor: (0.406, 0.389), target_y: 0.53 },
-    Placement { button: RemoteButton::Home, left: true, anchor: (0.406, 0.479), target_y: 0.68 },
-    Placement { button: RemoteButton::Menu, left: true, anchor: (0.406, 0.569), target_y: 0.83 },
-    Placement { button: RemoteButton::Right, left: false, anchor: (0.638, 0.246), target_y: 0.215 },
-    Placement { button: RemoteButton::Ok, left: false, anchor: (0.502, 0.246), target_y: 0.36 },
-    Placement { button: RemoteButton::Down, left: false, anchor: (0.502, 0.317), target_y: 0.505 },
-    Placement { button: RemoteButton::VolumeUp, left: false, anchor: (0.604, 0.390), target_y: 0.65 },
-    Placement { button: RemoteButton::VolumeDown, left: false, anchor: (0.604, 0.480), target_y: 0.795 },
-    Placement { button: RemoteButton::Tv, left: false, anchor: (0.604, 0.569), target_y: 0.94 },
+    Placement { button: RemoteButton::Power, left: true, anchor: (0.386, 0.099), target_y: 0.0667 },
+    Placement { button: RemoteButton::Up, left: true, anchor: (0.502, 0.179), target_y: 0.2400 },
+    Placement { button: RemoteButton::Left, left: true, anchor: (0.362, 0.246), target_y: 0.4133 },
+    Placement { button: RemoteButton::Back, left: true, anchor: (0.406, 0.389), target_y: 0.5867 },
+    Placement { button: RemoteButton::Home, left: true, anchor: (0.406, 0.479), target_y: 0.7600 },
+    Placement { button: RemoteButton::Menu, left: true, anchor: (0.406, 0.569), target_y: 0.9333 },
+    Placement { button: RemoteButton::Right, left: false, anchor: (0.638, 0.246), target_y: 0.0667 },
+    Placement { button: RemoteButton::Ok, left: false, anchor: (0.502, 0.246), target_y: 0.2400 },
+    Placement { button: RemoteButton::Down, left: false, anchor: (0.502, 0.317), target_y: 0.4133 },
+    Placement { button: RemoteButton::VolumeUp, left: false, anchor: (0.604, 0.390), target_y: 0.5867 },
+    Placement { button: RemoteButton::VolumeDown, left: false, anchor: (0.604, 0.480), target_y: 0.7600 },
+    Placement { button: RemoteButton::Tv, left: false, anchor: (0.604, 0.569), target_y: 0.9333 },
 ];
 
 /// The canvas' laid-out geometry at the current window width.
@@ -589,8 +611,12 @@ struct CanvasGeom {
 impl CanvasGeom {
     fn for_width(w: f32, h: f32) -> CanvasGeom {
         let sc = (w / CANVAS_BASE_W).min(1.0);
-        let photo_w = PHOTO_W * sc;
-        let photo_h = PHOTO_H * sc;
+        // The photo fills the canvas height down to the band margins (capped,
+        // see `PHOTO_GROW_MAX`) instead of scaling with the width: cards keep
+        // their full height at every width, so a width-scaled photo would
+        // shrink away from their leader lines.
+        let photo_h = (h - 2.0 * PHOTO_BAND_Y).min(PHOTO_H * PHOTO_GROW_MAX);
+        let photo_w = photo_h * PHOTO_W / PHOTO_H;
         CanvasGeom {
             w,
             h,
@@ -619,23 +645,21 @@ impl CanvasGeom {
     }
 }
 
-/// A card's rendered height from the kit's row metrics: header, three
-/// gesture rows, one shortcut-draft row per slot holding a shortcut, and the
-/// hairline dividers between them.
+/// A card's rendered height from the kit's row metrics: the compact single
+/// row, plus one shortcut-draft row per slot holding a shortcut.
 fn card_estimate_h(s: &AppState, button: RemoteButton) -> f32 {
     let drafts = [Slot::Single, Slot::Double, Slot::Long]
         .iter()
         .filter(|slot| s.shortcut_edits.contains_key(&slot_key(button, **slot)))
         .count() as f32;
-    CARD_HEAD_H + 3.0 * CARD_SLOT_H + CARD_DIVIDERS + drafts * CARD_DRAFT_H
+    CARD_ROW_H + drafts * CARD_DRAFT_H
 }
 
-/// The canvas height that keeps the expanded cards apart: cards keep their
+/// The canvas height that keeps the compact cards apart: cards keep their
 /// content-driven height while their centers hold the placement fractions, so
-/// the canvas grows until every column fits — neighbors `CANVAS_GAP` apart
-/// and the end cards `CANVAS_EDGE` inside the canvas. With the kit's current
-/// metrics this resolves to 1693.75 pt (the tv card's 0.94 target_y against
-/// its ~187 pt height dominates); it re-grows as shortcut drafts add rows.
+/// the height grows when shortcut drafts make the end cards taller — the
+/// fractions resolve to exactly the 570-pt design height with plain rows, and
+/// re-grow only when a drafted edge card no longer fits its margin.
 pub(crate) fn mapping_canvas_h(s: &AppState) -> f32 {
     let card_h = |b: RemoteButton| card_estimate_h(s, b);
     let mut h = CANVAS_MIN_H;
@@ -684,93 +708,127 @@ fn leader_lines(p: &Placement, g: &CanvasGeom, color: rune::Color) -> Vec<El> {
     vec![vertical, horizontal]
 }
 
-/// One button's mapping card, `card_w` wide: headline with pressed indicator,
-/// then one row per gesture slot with the action picker trailing. A shortcut
-/// draft gets its own full-width row with the chord text field. On the canvas
-/// the caller positions the returned card absolutely.
+/// Short label for a picker trigger. The compact row shows the three gesture
+/// pickers side by side, so the chosen value shrinks to its essence; the
+/// picker's option list stays the full `PICKER_OPTIONS` wording.
+fn action_short_label(action: &ButtonAction) -> &'static str {
+    match action {
+        ButtonAction::Disabled => "—",
+        ButtonAction::Shortcut { .. } => "Shortcut",
+        ButtonAction::MediaKey { key } => match key {
+            MediaKey::Mute => "Mute",
+            MediaKey::VolumeDown => "Vol-",
+            MediaKey::VolumeUp => "Vol+",
+            MediaKey::PlayPause => "Play",
+            MediaKey::Prev => "Prev",
+            MediaKey::Next => "Next",
+        },
+        ButtonAction::MouseClick { button } => match button {
+            MouseButton::Left => "L-Click",
+            MouseButton::Right => "R-Click",
+            MouseButton::Middle => "M-Click",
+        },
+        ButtonAction::MouseMove { .. } => "Move",
+        ButtonAction::Scroll { .. } => "Scroll",
+    }
+}
+
+/// The name a card shows for its button: the compact row has one line for the
+/// dot, the name and three pickers, so the snake-case protocol names become
+/// their product labels (the volume rocker reads like the remote's own `+` /
+/// `-` glyphs). Element keys stay keyed by the protocol name.
+fn button_display_name(button: RemoteButton) -> &'static str {
+    match button {
+        RemoteButton::Power => "Power",
+        RemoteButton::Up => "Up",
+        RemoteButton::Down => "Down",
+        RemoteButton::Left => "Left",
+        RemoteButton::Right => "Right",
+        RemoteButton::Ok => "OK",
+        RemoteButton::Back => "Back",
+        RemoteButton::Home => "Home",
+        RemoteButton::Menu => "Menu",
+        RemoteButton::VolumeUp => "Vol +",
+        RemoteButton::VolumeDown => "Vol -",
+        RemoteButton::Tv => "TV",
+        RemoteButton::VolumeMute => "Mute",
+    }
+}
+
+/// One button's mapping card, `card_w` wide: a single compact row — pressed
+/// dot, button name, and the three gesture pickers side by side — plus a
+/// shortcut-draft row (text field, and the parse error while it is invalid)
+/// per slot holding a shortcut draft. On the canvas the caller positions the
+/// returned card absolutely.
 fn button_card(s: &AppState, button: RemoteButton, k: &Kit, layer: &mut Vec<El>, card_w: f32) -> El {
     let pressed = s.pressed & (1 << button.ordinal()) != 0;
-    // Controls shrink with the card, so a scaled canvas keeps row proportions.
+    // Horizontal metrics shrink with the card so a scaled canvas keeps row
+    // proportions; vertical metrics stay fixed (they drive the canvas height).
     let sc = (card_w / CARD_W).min(1.0);
-    let pick_w = 170.0 * sc;
-    let field_w = 200.0 * sc;
-    let mut rows: Vec<El> = Vec::new();
+    let pick_w = PICK_W * sc;
+    let field_w = card_w - 2.0 * CARD_PAD_X * sc;
 
-    rows.push(
-        row()
-            .key(format!("row-head-{}", button.name()))
-            .w_full()
-            .center_y()
-            .gap(space::S2)
-            .px(16.0)
-            .py(space::S3)
-            .child(
-                dot(if pressed { k.c.bg_accent } else { k.c.text_faint })
-                    .key(format!("dot-{}", button.name())),
-            )
-            .child(
-                text(button.name().to_string())
-                    .key(format!("name-{}", button.name()))
-                    .font(HEADLINE)
-                    .grow(1.0)
-                    .color(k.c.text_base),
-            )
-            .child(
-                text(if pressed { "pressed" } else { "" })
-                    .key(format!("pressed-{}", button.name().to_ascii_lowercase()))
-                    .font(FOOTNOTE)
-                    .color(k.c.text_accent),
-            ),
-    );
+    let mut main = row()
+        .key(format!("row-main-{}", button.name()))
+        .w_full()
+        .center_y()
+        .gap(space::S1)
+        .px(CARD_PAD_X * sc)
+        .py(CARD_ROW_PY)
+        .child(
+            dot(if pressed { k.c.bg_accent } else { k.c.text_faint })
+                .key(format!("dot-{}", button.name())),
+        )
+        .child(
+            text(button_display_name(button).to_string())
+                .key(format!("name-{}", button.name()))
+                .font(HEADLINE)
+                .grow(1.0)
+                .truncate()
+                .color(k.c.text_base),
+        );
 
+    let mut drafts: Vec<El> = Vec::new();
     for slot in [Slot::Single, Slot::Double, Slot::Long] {
         let pick_key = format!("pick-{}-{}", button.name(), slot.caption().to_ascii_lowercase());
         let current = s
             .settings
             .mappings
             .slot_action(button, slot)
-            .map(|a| a.picker_label())
-            .unwrap_or_else(|| "Disabled".to_string());
-        let set = current != "Disabled";
+            .map(action_short_label)
+            .unwrap_or("—");
+        main = main.child({
+            // Mini field: the kit trigger with its paddings tightened for the
+            // compact row, so the short labels fit the `pick_w` box.
+            Select::new(pick_key.clone(), &PICKER_OPTIONS)
+                .appearance(SelectAppearance::Field)
+                .label(format!("{} {}", button_display_name(button), slot.caption()))
+                .width(pick_w)
+                .current(Some(current))
+                .open(s.open_picker.as_deref() == Some(pick_key.as_str()))
+                .on_toggle({
+                    let pick_key = pick_key.clone();
+                    move |s: &mut AppState| {
+                        s.open_picker = match &s.open_picker {
+                            Some(open) if *open == pick_key => None,
+                            _ => Some(pick_key.clone()),
+                        }
+                    }
+                })
+                .on_close(|s: &mut AppState| s.open_picker = None)
+                .on_choose(move |s: &mut AppState, choice: &str, _: &mut Tx| {
+                    s.open_picker = None;
+                    s.choose_action(button, slot, choice);
+                })
+                .build(k, layer)
+                // Mini field: tighten the kit trigger's own trailing padding
+                // and gap so the short labels fit the `pick_w` box (the 8-pt
+                // leading inset lives on the value row inside and stays).
+                .gap(2.0)
+                .pr(2.0)
+        });
 
-        rows.push(
-            row()
-                .key(format!("row-slot-{pick_key}"))
-                .w_full()
-                .center_y()
-                .gap(space::S3)
-                .px(16.0)
-                .py(space::S3)
-                .child(
-                    text(slot.caption().to_string())
-                        .grow(1.0)
-                        .font(type_::BODY)
-                        .color(if set { k.c.text_base } else { k.c.text_faint }),
-                )
-                .child(
-                    Select::new(pick_key.clone(), &PICKER_OPTIONS)
-                        .width(pick_w)
-                        .current(Some(current.as_str()))
-                        .open(s.open_picker.as_deref() == Some(pick_key.as_str()))
-                        .on_toggle({
-                            let pick_key = pick_key.clone();
-                            move |s: &mut AppState| {
-                                s.open_picker = match &s.open_picker {
-                                    Some(open) if *open == pick_key => None,
-                                    _ => Some(pick_key.clone()),
-                                }
-                            }
-                        })
-                        .on_close(|s: &mut AppState| s.open_picker = None)
-                        .on_choose(move |s: &mut AppState, choice: &str, _: &mut Tx| {
-                            s.open_picker = None;
-                            s.choose_action(button, slot, choice);
-                        })
-                        .build(k, layer),
-                ),
-        );
-
-        // Shortcut drafts: their own row under the slot picker.
+        // Shortcut drafts: a row under the compact main row.
         let edit_key = slot_key(button, slot);
         if let Some(edit) = s.shortcut_edits.get(&edit_key) {
             let error = s.chord_errors.get(&edit_key).cloned();
@@ -778,7 +836,7 @@ fn button_card(s: &AppState, button: RemoteButton, k: &Kit, layer: &mut Vec<El>,
                 .key(format!("shortcut-{pick_key}"))
                 .w_full()
                 .gap(space::S1)
-                .px(16.0)
+                .px(CARD_PAD_X * sc)
                 .pb(space::S3);
             draft = draft.child(
                 TextInput::new(edit)
@@ -800,20 +858,36 @@ fn button_card(s: &AppState, button: RemoteButton, k: &Kit, layer: &mut Vec<El>,
                         .color(k.c.danger.fg),
                 );
             }
-            rows.push(draft);
+            drafts.push(draft);
         }
     }
 
+    // The card: the compact row, then a hairline divider and a row per draft.
     let mut card = col()
         .key(format!("row-{}", button.name()))
         .w(card_w)
         .radius(radius::LG)
-        .fill(k.c.bg_base);
-    for (i, row) in rows.into_iter().enumerate() {
-        if i > 0 {
-            card = card.child(el().h(1.0).w_full().fill(k.c.border_muted));
-        }
-        card = card.child(row);
+        .fill(k.c.bg_base)
+        .child(main);
+    // While the button is held, an accent badge floats on the card's top
+    // corner — beside the accent dot and its accent leader line — without
+    // competing with the row's layout.
+    if pressed {
+        card = card.child(
+            el()
+                .absolute(card_w - 66.0, -9.0)
+                .child(
+                    Badge::new("pressed")
+                        .variant(BadgeVariant::Accent)
+                        .build(k)
+                        .key(format!("pressed-{}", button.name().to_ascii_lowercase())),
+                ),
+        );
+    }
+    for draft in drafts {
+        card = card
+            .child(el().h(1.0).w_full().fill(k.c.border_muted))
+            .child(draft);
     }
     card
 }
@@ -863,7 +937,9 @@ fn buttons_section(s: &AppState, k: &Kit, layer: &mut Vec<El>) -> El {
             canvas,
             // The 13th button has no physical spot on the RC003 body.
             group_header("Also on this remote", k),
-            row().w_full().center().child(button_card(s, RemoteButton::VolumeMute, k, layer, 320.0)),
+            // A little wider than the canvas cards: it stands alone, with no
+            // photo between it and the window edge.
+            row().w_full().center().child(button_card(s, RemoteButton::VolumeMute, k, layer, 360.0)),
         ],
     )
 }

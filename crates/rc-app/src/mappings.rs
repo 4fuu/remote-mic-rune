@@ -143,21 +143,6 @@ pub enum ButtonAction {
     },
 }
 
-impl ButtonAction {
-    /// Label shown in the action picker (falls back to names for actions the
-    /// V1 picker cannot create but a hand-edited settings file may contain).
-    pub fn picker_label(&self) -> String {
-        match self {
-            ButtonAction::Disabled => "Disabled".to_string(),
-            ButtonAction::Shortcut { .. } => "Shortcut".to_string(),
-            ButtonAction::MediaKey { key } => key.label().to_string(),
-            ButtonAction::MouseClick { button } => button.label().to_string(),
-            ButtonAction::MouseMove { .. } => "Mouse: Move".to_string(),
-            ButtonAction::Scroll { .. } => "Scroll".to_string(),
-        }
-    }
-}
-
 /// Which gesture slot of a button a mapping applies to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Slot {
