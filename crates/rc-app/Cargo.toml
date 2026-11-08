@@ -1,0 +1,20 @@
+[package]
+name = "rc-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Desktop application shell for remote-mic-rune (Rune UI): status, capture control, button mappings, helper task control, settings."
+
+[[bin]]
+name = "rc-app"
+path = "src/main.rs"
+
+[dependencies]
+rc-protocol = { path = "../rc-protocol" }
+rc-bridge = { path = "../rc-bridge" }
+rc-mapping = { path = "../rc-mapping" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rune = { workspace = true }
+rune-kit = { workspace = true }

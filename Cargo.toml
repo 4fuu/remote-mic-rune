@@ -6,6 +6,7 @@ members = [
     "crates/rc-bridge",
     "crates/rc-mapping",
     "crates/rc-helper",
+    "crates/rc-app",
 ]
 
 [workspace.package]
@@ -17,6 +18,11 @@ repository = "https://github.com/4fuu/remote-mic-rune"
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Rune (GPU-rendered Rust UI). Pre-release: pinned to a commit of `dev`,
+# which upstream promises never to rewrite.
+rune = { git = "https://github.com/anomalyco/rune", rev = "79fed3b5f1800fd031b8178172a6af7d713c9303" }
+rune-kit = { git = "https://github.com/anomalyco/rune", rev = "79fed3b5f1800fd031b8178172a6af7d713c9303" }
 
 [profile.release]
 lto = "thin"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Orb setup: Rust toolchain + Windows cross targets.
+# Orb setup: Rust toolchain + Windows cross targets + host-test system libs.
 set -euo pipefail
 
 if ! command -v cargo >/dev/null 2>&1; then
@@ -12,4 +12,11 @@ rustup target add x86_64-pc-windows-msvc x86_64-pc-windows-gnu
 if ! command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then
   sudo apt-get update -qq
   sudo apt-get install -y -qq mingw-w64
+fi
+
+# System libs needed to LINK rc-app host tests (Rune's Linux UI backend:
+# winit/x11/wayland). Not needed for cross-checking or cross-building.
+if ! pkg-config --exists xkbcommon 2>/dev/null; then
+  sudo apt-get update -qq
+  sudo apt-get install -y -qq libxkbcommon-dev libwayland-dev libx11-dev
 fi

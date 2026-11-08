@@ -1,2 +1,8 @@
 [target.x86_64-pc-windows-gnu]
 linker = "x86_64-w64-mingw32-gcc"
+
+[env]
+# blake3 (transitive via rune) needs ml64.exe for its msvc asm path; Linux
+# orbs have no such compiler, so force the portable implementation. Harmless
+# on a real Windows build.
+CARGO_FEATURE_PURE = "1"
