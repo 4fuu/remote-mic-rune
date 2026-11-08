@@ -15,6 +15,7 @@ mod status;
 mod task;
 mod tray;
 mod ui;
+mod views;
 
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, mpsc};
