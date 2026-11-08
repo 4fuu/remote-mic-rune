@@ -9,6 +9,7 @@ mod chord;
 mod engine;
 mod mappings;
 mod real;
+mod remote_photo;
 mod service;
 mod settings;
 mod status;
@@ -68,7 +69,7 @@ fn main() {
     // 3. The Rune app and its handle (background threads talk to the UI
     //    only through it).
     let app = App::new(rune::AppSpec::<ui::AppState> {
-        ..rune::AppSpec::new("Remote Mic Rune", (780.0, 720.0), ui::AppState::from_startup, ui::view)
+        ..rune::AppSpec::new("Remote Mic Rune", (960.0, 780.0), ui::AppState::from_startup, ui::view)
     });
     let handle = app.handle();
 
