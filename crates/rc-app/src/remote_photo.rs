@@ -20,13 +20,8 @@ thread_local! {
     };
 }
 
-/// The shared remote photo. Clone-per-call is cheap (an Arc handle); elements
-/// take `&Pixels`, so callers can also borrow via [`with_remote_photo`].
+/// The shared remote photo. Clone-per-call is cheap (an Arc handle); pass a
+/// reference to the element: `el().pixels(&remote_photo())`.
 pub fn remote_photo() -> Pixels {
     PHOTO.with(|p| p.clone())
-}
-
-/// Run `f` with the shared photo, for `el().pixels(&photo)` call sites.
-pub fn with_remote_photo<R>(f: impl FnOnce(&Pixels) -> R) -> R {
-    PHOTO.with(f)
 }

@@ -194,6 +194,10 @@ pub struct AppState {
     pub task_busy: bool,
     /// Last settings save failure, shown in the footer.
     pub save_error: Option<String>,
+    /// The Buttons mapping canvas' laid-out width in points, fed back by the
+    /// canvas element (`El::on_drawn_layout`) so the view can scale the
+    /// spatial layout to narrow windows. Starts at the design width.
+    pub buttons_canvas_w: f32,
 }
 
 impl AppState {
@@ -217,6 +221,7 @@ impl AppState {
             task_note: None,
             task_busy: false,
             save_error: None,
+            buttons_canvas_w: crate::views::CANVAS_BASE_W,
         };
         // Faithful to startup: preconfigured shortcuts get draft fields.
         state.seed_shortcut_drafts();
@@ -243,6 +248,7 @@ impl AppState {
             task_note: None,
             task_busy: false,
             save_error: None,
+            buttons_canvas_w: crate::views::CANVAS_BASE_W,
         };
         // Existing shortcut mappings get drafts so their fields show at once.
         state.seed_shortcut_drafts();
@@ -519,7 +525,6 @@ mod tests {
         use rune::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer, write_png};
 
         let gpu = Gpu::headless();
-        let (w, h) = (1560, 1440); // 2x the 780x720 window
         let mut settings = settings_with_mappings();
         settings.window.dark = Some(false); // the SwiftUI-style light look
         settings.capture_enabled = true;
@@ -538,8 +543,22 @@ mod tests {
                 generation: 3,
                 ..BridgeStatus::default()
             };
-            let mut rt = rune::Runtime::new(state, view, (780.0, 720.0), rune::Env::new(false, 2.0));
+            // The Buttons mapping canvas is a tall fixed geometry: render it
+            // in a window tall enough to show the whole canvas (intro, the
+            // canvas itself, and the volume_mute card below it).
+            let (win_w, win_h) = if section == Section::Buttons {
+                (780.0, crate::views::mapping_canvas_h(&state) + 400.0)
+            } else {
+                (780.0, 720.0)
+            };
+            let (w, h) = ((win_w * 2.0) as u32, (win_h * 2.0) as u32); // 2x scale
+            let mut rt = rune::Runtime::new(state, view, (win_w, win_h), rune::Env::new(false, 2.0));
             rt.frame(0.0);
+            // The canvas' laid-out width feeds back into state between
+            // frames; land the re-laid-out spatial geometry before drawing.
+            rt.frame(1.0 / 60.0);
+            rt.settle_all();
+            rt.frame(1.0 / 60.0);
             let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
             renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (w, h));
             renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
@@ -739,6 +758,11 @@ mod tests {
         state.section = Section::Buttons;
         let mut rt = rune::Runtime::new(state, view, (760.0, 900.0), rune::Env::new(true, 1.0));
         rt.frame(0.0);
+        // The canvas' laid-out width feeds back into state between frames;
+        // land the re-laid-out spatial geometry before asserting.
+        rt.frame(1.0 / 60.0);
+        rt.settle_all();
+        rt.frame(1.0 / 60.0);
         for button in ALL_BUTTONS {
             assert!(
                 rt.find(&format!("row-{}", button.name())).is_some(),
@@ -754,6 +778,51 @@ mod tests {
         }
         // The preconfigured shortcut got a draft field.
         assert!(rt.find("shortcut-pick-home-single").is_some(), "shortcut field renders");
+
+        // Geometry: every placed card sits fully inside the mapping canvas,
+        // and the cards of each column never overlap (the canvas height is
+        // computed from the cards' rendered heights, see views.rs).
+        let canvas = rt
+            .presented("mapping-canvas")
+            .expect("mapping canvas renders")
+            .0;
+        let mut left: Vec<[f32; 4]> = Vec::new();
+        let mut right: Vec<[f32; 4]> = Vec::new();
+        for p in crate::views::PLACEMENTS.iter() {
+            let [x, y, w, h] = rt
+                .presented(&format!("row-{}", p.button.name()))
+                .unwrap_or_else(|| panic!("card for {} renders", p.button.name()))
+                .0;
+            assert!(
+                x >= canvas[0] - 0.5
+                    && y >= canvas[1] - 0.5
+                    && x + w <= canvas[0] + canvas[2] + 0.5
+                    && y + h <= canvas[1] + canvas[3] + 0.5,
+                "{} card [{x}, {y}, {w}, {h}] leaves the canvas {:?}",
+                p.button.name(),
+                canvas
+            );
+            (if p.left { &mut left } else { &mut right }).push([x, y, w, h]);
+        }
+        for (mut column, side) in [(left, "left"), (right, "right")] {
+            column.sort_by_key(|r| (r[1] * 100.0) as i64);
+            for pair in column.windows(2) {
+                assert!(
+                    pair[1][1] >= pair[0][1] + pair[0][3] - 0.5,
+                    "{side} column cards overlap: {:?} vs {:?}",
+                    pair[0],
+                    pair[1]
+                );
+            }
+        }
+        // The photo is centered horizontally in the canvas.
+        let photo = rt.presented("remote-photo").expect("remote photo renders").0;
+        assert!(
+            (photo[0] - canvas[0] - (canvas[2] - photo[2]) / 2.0).abs() < 1.0,
+            "photo is centered: photo {:?} in canvas {:?}",
+            photo,
+            canvas
+        );
     }
 
     #[test]
