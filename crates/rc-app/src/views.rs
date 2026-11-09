@@ -92,7 +92,6 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
         .gap(space::S2)
         .pl(insets.leading + 16.0)
         .pr(insets.trailing + 12.0)
-        .fill(k.c.bg_base)
         .window_drag()
         .child(
             text("Remote Mic Rune")
@@ -110,8 +109,6 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
 
     let mut window = col().key("window").w_full().h_full().fill(k.c.page);
     window = window.child(titlebar);
-    // Hairline under the band, mirroring the bottom bar's top line.
-    window = window.child(el().key("titlebar-bottom-line").h(1.0).w_full().fill(k.c.border_muted));
 
     if let Some(warning) = &s.warning {
         window = window.child(callout(warning, &k, k.c.warning.bg, k.c.warning.fg));
@@ -123,10 +120,6 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
             .w_full()
             .justify_center()
             .px(space::S6)
-            // Breathing room under the titlebar: the tabs belong to the page
-            // below, not to the window chrome, so the larger gap sits above
-            // them and the smaller one separates them from the content.
-            .pt(space::S6)
             .pb(space::S3)
             .child(
                 SegmentedControl::new(&Section::labels(s.lang), Some(s.section.index()))

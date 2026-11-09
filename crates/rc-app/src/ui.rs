@@ -931,8 +931,8 @@ mod tests {
         assert!(rt.find("section-tabs").is_some(), "section tabs render");
         let tabs = rt.presented("section-tabs").expect("section tabs render").0;
         assert!(
-            tabs[1] >= band[1] + band[3] + 16.0,
-            "the tabs keep breathing room under the band: tabs {:?} vs band {:?}",
+            tabs[1] >= band[1] + band[3],
+            "page content starts below the band: tabs {:?} vs band {:?}",
             tabs,
             band
         );
