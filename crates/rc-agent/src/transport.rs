@@ -22,6 +22,7 @@
 //! sole liveness signals.
 
 use std::collections::VecDeque;
+use std::sync::atomic::Ordering;
 use std::sync::{Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -38,6 +39,7 @@ use rc_protocol::agent_wire::{encode_agent_line, AgentToHelper};
 use rc_protocol::consts::{AGENT_RECONNECT_MS, MAX_LINE_BYTES, PIPE_IDLE_BACKOFF_MS};
 
 use crate::clock::{mono_ms, unix_ms};
+use crate::logging;
 use crate::runtime::{lock_ok, RawHandle, Runtime, RUNTIME};
 
 /// Win32 GENERIC_READ | GENERIC_WRITE for the duplex pipe handle.
@@ -120,7 +122,11 @@ pub fn enqueue_agent(msg: &AgentToHelper) {
 
 // ----------------------------------------------------------------- threads
 
-/// Spawn reader, writer and heartbeat threads. Called once from boot.
+/// Spawn reader, writer, heartbeat, and diagnostic threads. Called once
+/// from boot. The diagnostic thread serves an in-memory mirror of the log
+/// ring plus liveness counters over a dedicated named pipe: inside the
+/// UMDF sandbox no filesystem location is writable, so the ring is the
+/// only way to see the agent's own story in the field.
 pub fn spawn_threads(rt: &'static Runtime) {
     let _ = thread::Builder::new()
         .name("rc-agent-rx".into())
@@ -131,12 +137,16 @@ pub fn spawn_threads(rt: &'static Runtime) {
     let _ = thread::Builder::new()
         .name("rc-agent-hb".into())
         .spawn(move || unsafe { heartbeat_loop(rt) });
+    let _ = thread::Builder::new()
+        .name("rc-agent-diag".into())
+        .spawn(crate::diag::serve);
 }
 
 // ------------------------------------------------------------------ reader
 
 unsafe fn reader_loop(rt: &'static Runtime) {
     loop {
+        crate::diag::LOOP_RX.fetch_add(1, Ordering::Relaxed);
         let can_retry = {
             let core = lock_ok(&rt.core);
             core.can_retry_connect(mono_ms())
@@ -151,6 +161,11 @@ unsafe fn reader_loop(rt: &'static Runtime) {
             thread::sleep(Duration::from_millis(u64::from(AGENT_RECONNECT_MS)));
             continue;
         };
+        logging::file_log(&format!(
+            "reader:connected handle=0x{:X} pipe={}",
+            h.0 as usize,
+            rt.pipe_name
+        ));
         // Store the handle first so the writer can see it, then flip the
         // lease-relevant connected flag, then say hello.
         *lock_ok(&rt.conn) = Some(RawHandle(h));
@@ -202,6 +217,11 @@ unsafe fn read_loop(rt: &'static Runtime, h: HANDLE) {
             if line.trim().is_empty() {
                 continue;
             }
+            // Field diagnostics: keep every command line in the ring except
+            // the 2 Hz renew chatter, which would evict everything else.
+            if !line.contains("\"type\":\"renew\"") {
+                logging::file_log(&format!("reader:downlink {line}"));
+            }
             let msgs = {
                 let mut core = lock_ok(&rt.core);
                 core.handle_line(&line, mono_ms(), unix_ms())
@@ -236,6 +256,7 @@ unsafe fn connect_pipe(name: &str) -> Option<HANDLE> {
 
 unsafe fn writer_loop(rt: &'static Runtime) {
     loop {
+        crate::diag::LOOP_TX.fetch_add(1, Ordering::Relaxed);
         let Some(line) = rt.out.pop_wait(Duration::from_millis(250)) else {
             continue;
         };
@@ -247,7 +268,14 @@ unsafe fn writer_loop(rt: &'static Runtime) {
             lock_ok(&rt.core).stats.send_dropped += 1;
             continue;
         };
-        match write_line(h, line.as_bytes()) {
+        // One JSON *line* per frame: the helper's session loop splits on
+        // '\n', so the newline is part of the frame, not an afterthought.
+        // Without it every byte arrives and none of it ever forms a line
+        // (field-verified 2026-11-09: bytes read into the buffer, hello
+        // never decoded, auth watchdog killed every session).
+        let mut frame = line.into_bytes();
+        frame.push(b'\n');
+        match write_line(h, &frame) {
             Ok(()) => {}
             Err(_) => {
                 lock_ok(&rt.core).stats.errors += 1;
@@ -268,10 +296,26 @@ unsafe fn writer_loop(rt: &'static Runtime) {
 /// drains, and the lease/heartbeat watchdogs bound any wedge anyway.
 unsafe fn write_line(h: HANDLE, bytes: &[u8]) -> Result<(), ()> {
     let mut n = 0u32;
-    match WriteFile(h, Some(bytes), Some(&mut n), None) {
+    let r = match WriteFile(h, Some(bytes), Some(&mut n), None) {
         Ok(()) if n as usize == bytes.len() => Ok(()),
-        _ => Err(()),
+        Ok(()) => {
+            crate::diag::LAST_WRITE_ERR.store(0xF000_0001, Ordering::Relaxed);
+            Err(())
+        }
+        Err(e) => {
+            crate::diag::LAST_WRITE_ERR.store(e.code().0 as u64, Ordering::Relaxed);
+            Err(())
+        }
+    };
+    match r {
+        Ok(()) => {
+            crate::diag::WRITE_OK.fetch_add(1, Ordering::Relaxed);
+        }
+        Err(()) => {
+            crate::diag::WRITE_FAIL.fetch_add(1, Ordering::Relaxed);
+        }
     }
+    r
 }
 
 // --------------------------------------------------------------- heartbeat
@@ -283,6 +327,7 @@ unsafe fn heartbeat_loop(rt: &'static Runtime) {
     };
     loop {
         thread::sleep(Duration::from_millis(u64::from(hb_ms)));
+        crate::diag::LOOP_HB.fetch_add(1, Ordering::Relaxed);
 
         let mut msgs: Vec<AgentToHelper> = Vec::new();
         let mut pending_drop: Option<(&'static str, bool)> = None;

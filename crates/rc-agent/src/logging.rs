@@ -73,10 +73,12 @@ pub fn init() {
 /// Append one timestamped line to the log file. Best-effort: open errors,
 /// write errors and a missing %TEMP% are all ignored.
 pub fn file_log(msg: &str) {
+    let line = format!("{} [{}] {msg}", unix_ms(), mono_ms());
+    crate::diag::ring_push(&line);
     let Some(path) = log_path() else {
         return;
     };
-    let line = format!("{} [{}] {msg}\n", unix_ms(), mono_ms());
+    let line = format!("{line}\n");
     let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) else {
         return;
     };

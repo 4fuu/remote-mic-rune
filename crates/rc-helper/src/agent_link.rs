@@ -216,7 +216,7 @@ fn accept_loop(
             pipe.close();
             break;
         }
-        logger.info(&format!("agent client connected on {server_name}"));
+        logger.info(&format!("agent client connected on {server_name} (instance handle 0x{:X})", pipe.handle.0 as usize));
         let _ = events.send(AgentEvent::Connected);
 
         // Newest wins: politely dismiss any session still attached.

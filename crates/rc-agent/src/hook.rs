@@ -39,6 +39,12 @@ use std::sync::atomic::AtomicU64;
 /// reported stats by the heartbeat.
 pub static HW_IOCTL_CALLS: AtomicU64 = AtomicU64::new(0);
 
+/// Raw count of calls that passed the shape filter (target ioctl, 8-byte
+/// input with the expected selector, keyboard report id). Exposed for the
+/// diagnostic pipe: it separates "no reports flow through this host" from
+/// "reports flow but nothing matches".
+pub static HW_TARGET_HITS: AtomicU64 = AtomicU64::new(0);
+
 #[cfg(all(target_os = "windows", target_env = "msvc"))]
 pub use imp::install;
 
@@ -193,6 +199,7 @@ mod imp {
             return;
         }
 
+        super::HW_TARGET_HITS.fetch_add(1, Ordering::Relaxed);
         process_hit(&report, output_buffer);
     }
 

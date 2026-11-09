@@ -58,7 +58,7 @@ use {
         all_known_buttons, format_bye, format_edges, format_hello, format_ownership, format_ping,
         format_recovering, format_synth_ack, format_voice_frame,
     },
-    rc_protocol::buttons::VOICE_KEY_HID_USAGE,
+    rc_protocol::buttons::{ENHANCED_CAPTURE_BUTTON_USAGES, VOICE_KEY_HID_USAGE},
     rc_protocol::consts::{
         AGENT_AUTH_TIMEOUT_MS, AGENT_PIPE_PREFIX, AGENT_RX_TIMEOUT_MS, BRIDGE_PIPE_NAME,
         BRIDGE_PROTOCOL_VERSION, GATE_DELAY_MS, LEASE_RENEW_INTERVAL_MS, RECOVERY_COOLDOWN_MS,
@@ -1004,6 +1004,10 @@ impl Runtime {
             }
             AgentEvent::Edge { usages, reason } => {
                 self.last_agent_line = Instant::now();
+                self.logger.info(&format!(
+                    "[EDGE] usages={:04X?} reason={reason}",
+                    usages
+                ));
                 if let Some(link) = app {
                     link.send_line(format_edges(logging::unix_ms(), &usages));
                     if reason != "state" && !usages.is_empty() {
@@ -1140,9 +1144,19 @@ impl Runtime {
     /// Forward a targets set to the agent: `report` = app's button usages
     /// (whitelist-checked), `clear` = report plus the canary usage.
     /// Unknown usages are clamped out rather than forwarded (the agent would
-    /// reject the whole command otherwise).
+    /// reject the whole command otherwise). In observe mode the report set
+    /// is seeded with EVERY known button when the app has none configured:
+    /// the agent's report whitelist is also its edge-report gate, so an
+    /// empty set would swallow every keypress and the staged observe
+    /// verification would see silence (clearing stays off regardless via
+    /// the separate Mode command).
     fn send_targets(&self, agent: &AgentLink, generation: u64, usages: &[u16]) {
-        let mut report: Vec<u16> = usages
+        let effective: Vec<u16> = if usages.is_empty() && self.observe {
+            ENHANCED_CAPTURE_BUTTON_USAGES.iter().map(|(_, u)| *u).collect()
+        } else {
+            usages.to_vec()
+        };
+        let mut report: Vec<u16> = effective
             .iter()
             .copied()
             .filter(|u| all_known_buttons(&[*u]))
@@ -1156,10 +1170,10 @@ impl Runtime {
             }
         }
         clear.sort_unstable();
-        if report.len() != usages.len() {
+        if report.len() != effective.len() {
             self.logger.warn(&format!(
                 "targets clamped: app sent {:04X?}, forwarding known buttons only",
-                usages
+                effective
             ));
         }
         self.logger.kv(

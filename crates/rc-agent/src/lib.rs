@@ -16,6 +16,7 @@
 //! natively.
 
 pub mod clock;
+pub mod diag;
 pub mod frames;
 pub mod report;
 pub mod state;
