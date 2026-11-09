@@ -1,9 +1,15 @@
-//! Registry scan: find every HID device instance whose
-//! `Device Parameters\WUDFDiagnosticInfo` carries a `HostPid` value.
+//! Registry scan: find every device instance under the PnP `Enum` tree
+//! whose `Device Parameters\WUDFDiagnosticInfo` carries a `HostPid` value.
 //!
-//! Why a FULL walk and not an RC003-only search: the exclusive-host verdict
-//! needs to know which OTHER devices share the same WUDFHost — killing or
-//! injecting a shared host takes the user's other BLE devices down with it.
+//! Why a FULL walk and not an HID-only or RC003-only search:
+//! - A BLE-paired RC003 never appears under `Enum\HID`. Windows enumerates
+//!   its HID-over-GATT service under `Enum\BTHLEDEVICE\{00001812-...}` with
+//!   ids encoded `VID&012717_PID&32B8`; an HID-only walk reports "no host"
+//!   on exactly the machine the product targets.
+//! - The exclusive-host verdict needs to know which OTHER devices share the
+//!   same WUDFHost — killing or injecting a shared host takes the user's
+//!   other UMDF-hosted devices down with it. Only the whole tree gives the
+//!   true member count.
 //!
 //! The `HostPid` read is type- and width-aware (query type + required size
 //! first, then read by the actual width). On current Windows the value is a
@@ -14,15 +20,19 @@
 //! every failure mode is kept distinct, so both widths (and REG_BINARY with
 //! matching width) are decoded here and every failure mode is counted.
 
-use rc_protocol::consts::{DEVICE_PID, DEVICE_VID};
+use rc_protocol::consts::{DEVICE_PID, DEVICE_PID_BT, DEVICE_VID, DEVICE_VID_BT};
 
 /// One WUDF-diagnostic member node: a device instance with a HostPid value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostEntry {
-    /// Full device instance id, e.g. `HID\VID_2717&PID_32B8&MI_01\7&2d5f3a&0&0000`.
-    /// `pnputil /remove-device` accepts exactly this form.
+    /// Full device instance id as PnP knows it, e.g.
+    /// `HID\VID_2717&PID_32B8&MI_01\7&2d5f3a&0&0000` (USB form) or
+    /// `BTHLEDEVICE\{00001812-...}_Dev_VID&012717_PID&32b8_REV&00a4_...`
+    /// (BLE HID-over-GATT form). `pnputil /remove-device` accepts exactly
+    /// this form.
     pub instance_id: String,
-    /// The key path contains VID_2717&PID_32B8 (the RC003 remote).
+    /// The instance id identifies the RC003 remote (USB or Bluetooth id
+    /// encoding).
     pub is_rc003: bool,
     /// WUDFHost.exe pid hosting the device; 0 = host not running.
     pub pid: u32,
@@ -34,7 +44,7 @@ pub struct HostEntry {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HostScan {
     pub entries: Vec<HostEntry>,
-    /// Device instance keys visited under `Enum\HID`.
+    /// Device instance keys visited during the `Enum` tree walk.
     pub nodes_seen: usize,
     /// `Device Parameters\WUDFDiagnosticInfo` keys successfully opened
     /// (counted regardless of whether HostPid was then readable).
@@ -103,28 +113,30 @@ pub fn decode_host_pid(value_type: u32, raw: &[u8]) -> PidDecode {
     }
 }
 
-/// True when a registry key path under `Enum\HID` belongs to an RC003
-/// instance (contains `VID_2717&PID_32B8`). Matched case-insensitively:
-/// the registry itself is case-preserving but not case-enforcing.
+/// True when a registry key path under `Enum` belongs to an RC003 instance.
+/// Two encodings exist for the same hardware id pair:
+/// - USB/HID form: contains `VID_2717` and `PID_32B8` (underscore ids).
+/// - Bluetooth LE form: contains `VID&012717_PID&32B8` — the GATT device id
+///   with the `01` Bluetooth-SIG vendor source prefix baked in.
+/// Matched case-insensitively: the registry is case-preserving but not
+/// case-enforcing (BLE instances arrive lowercase in practice).
 pub fn is_rc003_key_path(key_path: &str) -> bool {
     let path = key_path.to_ascii_uppercase();
-    path.contains(DEVICE_VID) && path.contains(DEVICE_PID)
+    let usb = path.contains(DEVICE_VID) && path.contains(DEVICE_PID);
+    let ble = path.contains(DEVICE_VID_BT) && path.contains(DEVICE_PID_BT);
+    usb || ble
 }
 
-/// The device instance id (`HID\...` form) for a key path relative to
-/// `SYSTEM\CurrentControlSet\Enum\HID`.
+/// The device instance id for a key path relative to
+/// `SYSTEM\CurrentControlSet\Enum`. The walk runs from the `Enum` root, so
+/// the relative path already carries its real enumerator prefix
+/// (`HID\...`, `BTHLEDEVICE\...`) — PnP and `pnputil` accept it verbatim.
 pub fn instance_id_for_key_path(key_path: &str) -> String {
-    format!(r"HID\{key_path}")
+    key_path.to_string()
 }
 
 pub fn is_rc003_entry(entry: &HostEntry) -> bool {
-    entry.is_rc003
-        && is_rc003_key_path(
-            entry
-                .instance_id
-                .strip_prefix(r"HID\")
-                .unwrap_or(&entry.instance_id),
-        )
+    entry.is_rc003 && is_rc003_key_path(&entry.instance_id)
 }
 
 // ---------------------------------------------------------------------------
@@ -134,11 +146,11 @@ pub fn is_rc003_entry(entry: &HostEntry) -> bool {
 #[cfg(target_os = "windows")]
 mod windows_impl {
     use super::*;
-    use std::string::String;
     use rc_protocol::consts::{HOSTPID_VALUE, WUDF_DIAG_SUFFIX};
+    use std::string::String;
     use windows::core::{PCWSTR, PWSTR};
     use windows::Win32::Foundation::{
-        FILETIME, WIN32_ERROR, ERROR_FILE_NOT_FOUND, ERROR_MORE_DATA, ERROR_SUCCESS,
+        ERROR_FILE_NOT_FOUND, ERROR_MORE_DATA, ERROR_SUCCESS, FILETIME, WIN32_ERROR,
     };
     use windows::Win32::System::Registry::{
         RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_LOCAL_MACHINE,
@@ -244,13 +256,14 @@ mod windows_impl {
         decode_host_pid(actual_type.0, &buf[..len])
     }
 
-    /// Full walk of the HID enum tree; the module keeps the pure u32 REG_*
-    /// consts (the windows-rs REG_VALUE_TYPE variants are NOT imported so
-    /// they cannot shadow them).
+    /// Full walk of the PnP enum tree (HID, BTHLEDEVICE, and every other
+    /// enumerator); the module keeps the pure u32 REG_* consts (the
+    /// windows-rs REG_VALUE_TYPE variants are NOT imported so they cannot
+    /// shadow them).
     pub fn scan() -> Result<HostScan, String> {
         let mut scan = HostScan::default();
-        let root = open_key(HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Enum\HID")
-            .map_err(|code| format!("open Enum\\HID failed, win32 error {code}"))?;
+        let root = open_key(HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Enum")
+            .map_err(|code| format!("open Enum failed, win32 error {code}"))?;
         let result = walk(&root, String::new(), 0, &mut scan);
         unsafe {
             let _ = RegCloseKey(root);
@@ -259,12 +272,28 @@ mod windows_impl {
         Ok(scan)
     }
 
-    fn walk(parent: &HKEY, prefix: String, depth: usize, scan: &mut HostScan) -> Result<(), String> {
-        const MAX_DEPTH: usize = 4;
+    fn walk(
+        parent: &HKEY,
+        prefix: String,
+        depth: usize,
+        scan: &mut HostScan,
+    ) -> Result<(), String> {
+        // Instance keys live at `Enumerator\DeviceContainer\Instance` (3
+        // levels under `Enum`; BLE GATT is the deepest common form). The
+        // extra levels only bound runaway recursion through housekeeping
+        // subkeys (`Device Parameters`, `LogConf`, ...).
+        const MAX_DEPTH: usize = 5;
         if depth > MAX_DEPTH {
             return Ok(());
         }
         for name in enum_subkeys(*parent) {
+            // PnP housekeeping subtrees are skipped entirely: `Properties`
+            // is ACL-locked (one denied open per key on a full-tree walk)
+            // and `LogConf` never nests device instances; neither can carry
+            // `Device Parameters\WUDFDiagnosticInfo`.
+            if matches!(name.as_str(), "Properties" | "LogConf") {
+                continue;
+            }
             let child_path = if prefix.is_empty() {
                 name.clone()
             } else {
@@ -340,15 +369,16 @@ mod tests {
         // must contribute zero bytes, not panic (test builds wider buffers
         // than the value).
         let bytes = value.to_le_bytes();
-        (0..n)
-            .map(|i| if i < 8 { bytes[i] } else { 0 })
-            .collect()
+        (0..n).map(|i| if i < 8 { bytes[i] } else { 0 }).collect()
     }
 
     #[test]
     fn qword_pid_decodes() {
         // 8-byte REG_QWORD is the shape current Windows actually writes.
-        assert_eq!(decode_host_pid(REG_QWORD, &le(4012, 8)), PidDecode::Pid(4012));
+        assert_eq!(
+            decode_host_pid(REG_QWORD, &le(4012, 8)),
+            PidDecode::Pid(4012)
+        );
         assert_eq!(
             decode_host_pid(REG_QWORD, &le(0x0000_0000_1F_90, 8)),
             PidDecode::Pid(0x1F90)
@@ -358,8 +388,14 @@ mod tests {
     #[test]
     fn dword_pid_decodes() {
         // Older/other builds may store a 4-byte REG_DWORD; both widths must work.
-        assert_eq!(decode_host_pid(REG_DWORD, &le(4012, 4)), PidDecode::Pid(4012));
-        assert_eq!(decode_host_pid(REG_DWORD, &le(65535, 4)), PidDecode::Pid(65535));
+        assert_eq!(
+            decode_host_pid(REG_DWORD, &le(4012, 4)),
+            PidDecode::Pid(4012)
+        );
+        assert_eq!(
+            decode_host_pid(REG_DWORD, &le(65535, 4)),
+            PidDecode::Pid(65535)
+        );
     }
 
     #[test]
@@ -381,7 +417,10 @@ mod tests {
         // Truncated buffers must not silently decode as the low bytes.
         assert_eq!(decode_host_pid(REG_QWORD, &le(4012, 4)), PidDecode::BadSize);
         assert_eq!(decode_host_pid(REG_DWORD, &le(4012, 2)), PidDecode::BadSize);
-        assert_eq!(decode_host_pid(REG_SZ, "0123".as_bytes()), PidDecode::BadType);
+        assert_eq!(
+            decode_host_pid(REG_SZ, "0123".as_bytes()),
+            PidDecode::BadType
+        );
         assert_eq!(decode_host_pid(REG_NONE, &[]), PidDecode::BadType);
     }
 
@@ -396,7 +435,9 @@ mod tests {
 
     #[test]
     fn rc003_paths_recognized_case_insensitively() {
-        assert!(is_rc003_key_path(r"VID_2717&PID_32B8&MI_01\7&2d5f3a4b&0&0000"));
+        assert!(is_rc003_key_path(
+            r"VID_2717&PID_32B8&MI_01\7&2d5f3a4b&0&0000"
+        ));
         assert!(is_rc003_key_path(r"vid_2717&pid_32b8&mi_00"));
         assert!(!is_rc003_key_path(r"VID_1234&PID_5678&MI_01\7&0000"));
         assert!(!is_rc003_key_path(r"VID_2717&PID_0000&MI_01"));
@@ -404,16 +445,50 @@ mod tests {
     }
 
     #[test]
-    fn instance_ids_get_the_hid_prefix() {
+    fn rc003_ble_gatt_paths_recognized() {
+        // Real BLE-paired RC003 on Win11: the HID service collection lives
+        // under BTHLEDEVICE with the `VID&<source><vid>` GATT encoding, in
+        // lowercase from the registry.
+        assert!(is_rc003_key_path(
+            r"BTHLEDEVICE\{00001812-0000-1000-8000-00805f9b34fb}_Dev_VID&012717_PID&32b8_REV&00a4_c05d39c3274f\b&20a7291a&1&0055"
+        ));
+        assert!(is_rc003_key_path(
+            r"BTHLEDEVICE\{00001812-0000-1000-8000-00805F9B34FB}_DEV_VID&012717_PID&32B8_REV&00A4_C05D39C3274F\B&20A7291A&1&0055"
+        ));
+        // Wrong vendor source prefix (01 = Bluetooth SIG), wrong pid.
+        assert!(!is_rc003_key_path(
+            r"BTHLEDEVICE\{00001812-...}_Dev_VID&022717_PID&32b8_REV&00a4_c05d39c3274f\b&1&0055"
+        ));
+        assert!(!is_rc003_key_path(
+            r"BTHLEDEVICE\{00001812-...}_Dev_VID&012717_PID&1111_REV&00a4_c05d39c3274f\b&1&0055"
+        ));
+        // The USB fragments must not leak into the GATT form and vice versa.
+        assert!(!is_rc003_key_path(
+            r"BTHLEDEVICE\{0000fe59-...}_Dev_VID&010a46_PID&9000_REV&0001_001122334455\b&1&0804"
+        ));
+    }
+
+    #[test]
+    fn instance_ids_keep_their_enumerator_prefix() {
+        // Walk paths are relative to the `Enum` root, so the instance id is
+        // the path verbatim — PnP/pnputil accept both enumerator forms.
         assert_eq!(
-            instance_id_for_key_path(r"VID_2717&PID_32B8&MI_01\7&2d5f3a4b&0&0000"),
+            instance_id_for_key_path(r"HID\VID_2717&PID_32B8&MI_01\7&2d5f3a4b&0&0000"),
             r"HID\VID_2717&PID_32B8&MI_01\7&2d5f3a4b&0&0000"
         );
-        let entry = HostEntry {
-            instance_id: instance_id_for_key_path(r"VID_2717&PID_32B8"),
+        let usb = HostEntry {
+            instance_id: instance_id_for_key_path(r"HID\VID_2717&PID_32B8&MI_01\7&1&0000"),
             is_rc003: true,
             pid: 99,
         };
-        assert!(is_rc003_entry(&entry));
+        assert!(is_rc003_entry(&usb));
+        let ble = HostEntry {
+            instance_id: instance_id_for_key_path(
+                r"BTHLEDEVICE\{00001812-0000-1000-8000-00805f9b34fb}_Dev_VID&012717_PID&32b8_REV&00a4_c05d39c3274f\b&20a7291a&1&0055",
+            ),
+            is_rc003: true,
+            pid: 2672,
+        };
+        assert!(is_rc003_entry(&ble));
     }
 }

@@ -3,6 +3,7 @@
 //! error is swallowed, and synth frame traces are rate-limited (8/s) so a
 //! chatty device cannot flood the link.
 
+use std::fs::OpenOptions;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
@@ -30,11 +31,37 @@ static TRACE: Mutex<TraceWindow> = Mutex::new(TraceWindow {
 
 fn log_path() -> &'static Option<PathBuf> {
     LOG_PATH.get_or_init(|| {
-        let dir = std::env::var("TEMP")
-            .or_else(|_| std::env::var("TMP"))
-            .ok()?;
         let pid = std::process::id();
-        Some(PathBuf::from(dir).join(format!("rcr-agent-{pid}.log")))
+        // Candidate directories in preference order. A session-0 WUDFHost
+        // runs with a restricted service token: %TEMP% may be unset or
+        // unwritable there, so the shared ProgramData directory (where the
+        // helper also logs) is the fallback that keeps field debugging
+        // possible.
+        let mut dirs: Vec<PathBuf> = Vec::new();
+        for var in ["TEMP", "TMP"] {
+            if let Ok(dir) = std::env::var(var) {
+                if !dir.is_empty() && !dirs.contains(&PathBuf::from(&dir)) {
+                    dirs.push(PathBuf::from(dir));
+                }
+            }
+        }
+        if let Ok(pd) = std::env::var("ProgramData") {
+            dirs.push(PathBuf::from(pd).join("RemoteMicRune"));
+        }
+        for dir in &dirs {
+            let path = dir.join(format!("rcr-agent-{pid}.log"));
+            // The candidate must be openable for append; the first one that
+            // is wins for the lifetime of the process.
+            if OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+                .is_ok()
+            {
+                return Some(path);
+            }
+        }
+        None
     })
 }
 

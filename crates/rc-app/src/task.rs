@@ -176,6 +176,21 @@ pub fn run_capture(program: &str, args: &[String], timeout: Duration) -> Result<
         match child.try_wait() {
             Ok(Some(status)) => break Some(status),
             Ok(None) if Instant::now() >= deadline => {
+                // Kill the whole tree: on Windows the spawned command is
+                // often a shell whose children inherit the output pipes, so
+                // killing only the direct child leaves the pipe drains
+                // blocked for as long as the grandchildren live.
+                #[cfg(windows)]
+                {
+                    use std::os::windows::process::CommandExt;
+                    let _ = Command::new("taskkill")
+                        .args(["/PID", &child.id().to_string(), "/T", "/F"])
+                        .creation_flags(CREATE_NO_WINDOW)
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status();
+                }
                 let _ = child.kill();
                 let _ = child.wait();
                 timed_out = true;

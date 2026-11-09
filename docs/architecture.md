@@ -36,9 +36,11 @@ RC003 (BLE HID) ──► WUDFHost.exe ──► kbdhid ──► Windows input
    window messages, `SendInput` echoes, low-level hooks — only ever sees
    what `kbdhid` let through.
 
-2. The elevated helper (`rc-helper.exe`) scans the registry for every HID
-   device instance whose `Device Parameters\WUDFDiagnosticInfo` carries a
-   `HostPid` value, decides which `WUDFHost.exe` exclusively hosts the
+2. The elevated helper (`rc-helper.exe`) scans the registry for every device
+   instance in the PnP `Enum` tree whose `Device Parameters\WUDFDiagnosticInfo`
+   carries a `HostPid` value (a BLE-paired RC003 shows up as a
+   `BTHLEDEVICE\{00001812-...}` HID-over-GATT instance, not under `Enum\HID`),
+   decides which `WUDFHost.exe` exclusively hosts the
    RC003, and injects `rc_agent.dll` into that process. Injection uses
    `VirtualAllocEx` / `WriteProcessMemory` / `CreateRemoteThread`; the agent
    bootstraps itself from a handoff config the helper passes in.

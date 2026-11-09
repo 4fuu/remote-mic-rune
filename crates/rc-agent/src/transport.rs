@@ -7,9 +7,13 @@
 //!   the shared 2 ms idle backoff, so the rx watchdog stays meaningful.
 //! - writer: the ONLY writer, fed by the outbound queue (single serialized
 //!   writer — interleaved concurrent writers can silently lose whole
-//!   message classes).
-//!   Writes are overlapped with a timeout plus `CancelIoEx`, so a stuck peer
-//!   can never wedge this thread.
+//!   message classes). Writes are synchronous, matching the handle's mode:
+//!   the connection is opened WITHOUT FILE_FLAG_OVERLAPPED, and an
+//!   overlapped write on a synchronous handle is the one combination
+//!   Windows documents as able to "incorrectly report that the write
+//!   operation is complete" (observed in the field: reported success, zero
+//!   bytes delivered). A broken pipe fails the write immediately, and the
+//!   lease/heartbeat watchdogs bound any stall.
 //! - heartbeat: watchdogs (auth before rx), lease-expiry release, retired
 //!   handle reaping, and the periodic stats heartbeat.
 //!
@@ -22,16 +26,13 @@ use std::sync::{Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use windows::core::{PCWSTR, HRESULT};
-use windows::Win32::Foundation::{CloseHandle, ERROR_IO_PENDING, HANDLE, WAIT_OBJECT_0};
+use windows::core::PCWSTR;
+use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, ReadFile, WriteFile, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_MODE, OPEN_EXISTING,
 };
-use windows::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
 use windows::Win32::System::Pipes::PeekNamedPipe;
-use windows::Win32::System::Threading::{
-    CreateEventW, GetCurrentProcessId, ResetEvent, WaitForSingleObject,
-};
+use windows::Win32::System::Threading::GetCurrentProcessId;
 
 use rc_protocol::agent_wire::{encode_agent_line, AgentToHelper};
 use rc_protocol::consts::{AGENT_RECONNECT_MS, MAX_LINE_BYTES, PIPE_IDLE_BACKOFF_MS};
@@ -44,12 +45,9 @@ const GENERIC_READ_WRITE: u32 = 0x8000_0000 | 0x4000_0000;
 /// Outbound backlog cap: after this many queued
 /// lines the newest is dropped and counted rather than growing unbounded.
 const TX_QUEUE_CAP: usize = 512;
-/// A single serialized write may take at most this long before it is
-/// cancelled and the connection is treated as dead.
-const WRITE_TIMEOUT_MS: u32 = 1000;
 /// Retired handles are closed only after this long, comfortably past any
-/// writer's WRITE_TIMEOUT + cancel window, so a handle is never closed under
-/// an in-flight overlapped write.
+/// reasonable drain window, so a handle is never closed under an in-flight
+/// write.
 const RETIRE_CLOSE_MS: u64 = 2500;
 /// Reader poll granularity while waiting for the next allowed reconnect.
 const RETRY_POLL_MS: u64 = 100;
@@ -237,11 +235,6 @@ unsafe fn connect_pipe(name: &str) -> Option<HANDLE> {
 // ------------------------------------------------------------------ writer
 
 unsafe fn writer_loop(rt: &'static Runtime) {
-    // One manual-reset event reused for every overlapped write of this
-    // (single) writer thread.
-    let Ok(ev) = CreateEventW(None, true, false, PCWSTR::null()) else {
-        return;
-    };
     loop {
         let Some(line) = rt.out.pop_wait(Duration::from_millis(250)) else {
             continue;
@@ -254,9 +247,9 @@ unsafe fn writer_loop(rt: &'static Runtime) {
             lock_ok(&rt.core).stats.send_dropped += 1;
             continue;
         };
-        match write_line(h, ev, line.as_bytes()) {
+        match write_line(h, line.as_bytes()) {
             Ok(()) => {}
-            Err(()) => {
+            Err(_) => {
                 lock_ok(&rt.core).stats.errors += 1;
                 drop_connection(rt, "write_error", false);
             }
@@ -264,29 +257,20 @@ unsafe fn writer_loop(rt: &'static Runtime) {
     }
 }
 
-/// One serialized overlapped write with a hard timeout. Ok only when the
-/// bytes were actually flushed to the pipe.
-unsafe fn write_line(h: HANDLE, ev: HANDLE, bytes: &[u8]) -> Result<(), ()> {
-    let _ = ResetEvent(ev);
-    let mut ov = OVERLAPPED::default();
-    ov.hEvent = ev;
+/// One synchronous write. The connection handle is opened WITHOUT
+/// FILE_FLAG_OVERLAPPED (see `connect_pipe`), so the write must be
+/// synchronous too: an OVERLAPPED write on a synchronous handle is the one
+/// combination Windows documents as "can incorrectly report that the write
+/// operation is complete" — observed in the field as writes that report
+/// success while zero bytes reach the pipe (the helper then times out
+/// waiting for a hello that never arrives). A broken pipe fails fast here;
+/// a full pipe cannot stall because the helper's session loop always
+/// drains, and the lease/heartbeat watchdogs bound any wedge anyway.
+unsafe fn write_line(h: HANDLE, bytes: &[u8]) -> Result<(), ()> {
     let mut n = 0u32;
-    match WriteFile(h, Some(bytes), Some(&mut n), Some(&mut ov)) {
-        Ok(()) => Ok(()),
-        // ERROR_IO_PENDING as HRESULT_FROM_WIN32(997): the write is queued on
-        // the event; wait for completion or cancel it on timeout.
-        Err(e) if e.code() == HRESULT::from_win32(ERROR_IO_PENDING.0) => {
-            if WaitForSingleObject(ev, WRITE_TIMEOUT_MS) == WAIT_OBJECT_0 {
-                GetOverlappedResult(h, &ov, &mut n, false).map(|_| ()).map_err(|_| ())
-            } else {
-                // Peer is not draining: cancel our own I/O so this thread
-                // can never wedge on a full pipe.
-                let _ = CancelIoEx(h, None);
-                let _ = WaitForSingleObject(ev, WRITE_TIMEOUT_MS);
-                Err(())
-            }
-        }
-        Err(_) => Err(()),
+    match WriteFile(h, Some(bytes), Some(&mut n), None) {
+        Ok(()) if n as usize == bytes.len() => Ok(()),
+        _ => Err(()),
     }
 }
 
@@ -305,8 +289,8 @@ unsafe fn heartbeat_loop(rt: &'static Runtime) {
         {
             let mut core = lock_ok(&rt.core);
             // Fold the lock-free ioctl counter into the reported stats.
-            core.stats.ioctl_calls = crate::hook::HW_IOCTL_CALLS
-                .load(std::sync::atomic::Ordering::Relaxed);
+            core.stats.ioctl_calls =
+                crate::hook::HW_IOCTL_CALLS.load(std::sync::atomic::Ordering::Relaxed);
             if let Some((reason, slow)) = core.watchdog_hit(mono_ms()) {
                 match reason {
                     "auth_mismatch" => core.stats.auth_rejected += 1,

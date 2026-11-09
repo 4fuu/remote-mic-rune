@@ -26,10 +26,15 @@ pub const IMAGE_FILE_MACHINE_I386: u16 = 0x014C;
 pub const IMAGE_FILE_MACHINE_AMD64: u16 = 0x8664;
 pub const IMAGE_FILE_MACHINE_ARM64: u16 = 0xAA64;
 
-/// Module name prefix that identifies a resident agent copy. The check is
+/// Module name prefixes that identify a resident agent copy. The check is
 /// name-prefix based (not exact path based) so the reconnect flow also finds
-/// an agent whose DLL path differs in case or spelling from ours.
+/// an agent whose DLL path differs in case or spelling from ours. The
+/// artifact builds as `rc_agent.dll` — Rust lib targets underscore the
+/// crate name — so BOTH the dash form (per-copy renamed deployments) and
+/// the underscore form (the built artifact) must match; a dash-only match
+/// rejects the DLL the helper itself just injected.
 pub const AGENT_MODULE_PREFIX: &str = "rc-agent";
+pub const AGENT_MODULE_PREFIX_UNDERSCORE: &str = "rc_agent";
 
 /// Human-readable machine name for logs and error text.
 pub fn machine_name(machine: u16) -> &'static str {
@@ -85,7 +90,8 @@ pub fn arch_gate(target: u16, dll: u16) -> Result<(), String> {
 pub fn module_is_agent(module_name_or_path: &str) -> bool {
     let lower = module_name_or_path.to_ascii_lowercase();
     let file_name = lower.rsplit(['\\', '/']).next().unwrap_or(&lower);
-    file_name.starts_with(AGENT_MODULE_PREFIX) && file_name.ends_with(".dll")
+    let matches = |prefix: &str| file_name.starts_with(prefix) && file_name.ends_with(".dll");
+    matches(AGENT_MODULE_PREFIX) || matches(AGENT_MODULE_PREFIX_UNDERSCORE)
 }
 
 /// Build the boot config handed to `rc_agent_boot`.
@@ -169,6 +175,58 @@ mod windows_impl {
             }
         }
         pe_machine_from_bytes(&buf[..filled])
+    }
+
+    /// Enable SeDebugPrivilege in this process's own token. WUDFHost runs
+    /// under a service account in session 0: an elevated admin still cannot
+    /// open it with PROCESS_VM_* rights until the held-but-disabled debug
+    /// privilege is enabled — without this, the very first module snapshot
+    /// or OpenProcess fails with access denied (GetLastError=5). One call
+    /// at startup covers the boot injection and every recovery re-inject.
+    pub fn enable_debug_privilege() -> Result<(), String> {
+        use windows::Win32::Foundation::LUID;
+        use windows::Win32::Security::{
+            AdjustTokenPrivileges, LookupPrivilegeValueW, LUID_AND_ATTRIBUTES,
+            SE_PRIVILEGE_ENABLED, TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES, TOKEN_QUERY,
+        };
+        use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+        const ERROR_NOT_ALL_ASSIGNED: u32 = 1300;
+        unsafe {
+            let mut token = HANDLE::default();
+            OpenProcessToken(
+                GetCurrentProcess(),
+                TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+                &mut token,
+            )
+            .map_err(|e| format!("OpenProcessToken failed, GetLastError={}", win32_code(&e)))?;
+            let name = wide("SeDebugPrivilege");
+            let mut luid = LUID::default();
+            LookupPrivilegeValueW(None, PCWSTR(name.as_ptr()), &mut luid).map_err(|e| {
+                format!(
+                    "LookupPrivilegeValueW(SeDebugPrivilege) failed, GetLastError={}",
+                    win32_code(&e)
+                )
+            })?;
+            let privileges = TOKEN_PRIVILEGES {
+                PrivilegeCount: 1,
+                Privileges: [LUID_AND_ATTRIBUTES {
+                    Luid: luid,
+                    Attributes: SE_PRIVILEGE_ENABLED,
+                }],
+            };
+            let adjusted =
+                AdjustTokenPrivileges(token, false, Some(&privileges), 0, None, None);
+            let _ = CloseHandle(token);
+            adjusted.map_err(|e| {
+                format!("AdjustTokenPrivileges failed, GetLastError={}", win32_code(&e))
+            })?;
+            // AdjustTokenPrivileges reports success even when the privilege
+            // is not held; ERROR_NOT_ALL_ASSIGNED is the real verdict.
+            if raw_last_error() == ERROR_NOT_ALL_ASSIGNED {
+                return Err("SeDebugPrivilege not held (helper not elevated?)".into());
+            }
+            Ok(())
+        }
     }
 
     /// One loaded module inside the target process.
@@ -586,7 +644,7 @@ mod windows_impl {
     }
 }
 #[cfg(target_os = "windows")]
-pub use windows_impl::inject;
+pub use windows_impl::{enable_debug_privilege, inject};
 
 #[cfg(not(target_os = "windows"))]
 pub fn inject(_pid: u32, _dll: &Path, _pipe: &str, _token: &str, _build: &str, _logger: &crate::logging::Logger) -> Result<(), String> {
@@ -676,9 +734,12 @@ mod tests {
         assert!(module_is_agent("RC-AGENT.DLL"));
         assert!(module_is_agent(r"C:\build\rc-agent.dll"));
         assert!(module_is_agent("rc-agent-dbg.dll"));
+        // The built artifact itself: Rust lib targets underscore the crate
+        // name, so the DLL the helper injects is rc_agent.dll.
+        assert!(module_is_agent("rc_agent.dll"));
+        assert!(module_is_agent(r"C:\ProgramData\RemoteMicRune\rc_agent.dll"));
         assert!(!module_is_agent("wudfhost.exe"));
         assert!(!module_is_agent("kernel32.dll"));
-        assert!(!module_is_agent("rc_agent.dll")); // underscore, not our prefix
         assert!(!module_is_agent("rc-agent")); // not a dll
     }
 

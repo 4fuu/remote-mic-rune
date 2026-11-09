@@ -35,6 +35,13 @@ cargo build --release --target x86_64-pc-windows-gnu
 Artifacts: `rc-helper.exe`, `rc_agent.dll`, `rc-app.exe`.
 **`rc_agent.dll` must sit in the same directory as `rc-helper.exe`.**
 
+Deployment location matters on real hardware: the helper injects the DLL
+into a session-0 `WUDFHost.exe` whose restricted service token cannot read
+per-user directories. Building and running straight from a user Temp
+directory makes the remote `LoadLibraryW` fail silently (returns NULL).
+Use a machine-readable location such as `C:\ProgramData\RemoteMicRune\`
+(pass `--agent-dll`, or place the whole artifact set there).
+
 ## 2. Staged verification without the UI
 
 Run this line first on a new machine. Open an elevated PowerShell in the
@@ -94,7 +101,7 @@ How to read the results:
 | Symptom | Check |
 | ------- | ----- |
 | Helper cannot connect to the app | Does `%LOCALAPPDATA%\RemoteMicRune\bridge.ini` carry the pid/token of this run? |
-| Agent never comes online | `%TEMP%\rcr-agent-<WUDFHost pid>.log`; helper logs under `%ProgramData%\RemoteMicRune\` |
+| Agent never comes online | Agent log: `%TEMP%\rcr-agent-<WUDFHost pid>.log`, falling back to `%ProgramData%\RemoteMicRune\` when the host token cannot write TEMP; helper logs under `%ProgramData%\RemoteMicRune\` |
 | Key stuck pressed | Not expected by design (absolute-state edges + lease fail-open). If it ever reproduces, record the helper log's `lease_expired` counter |
 | Volume keys do nothing | Confirm the remote is an RC003; the RC001 report format differs and is not supported by this version |
 | Defender blocks or deletes the helper | Re-add the exclusion for the artifact directory; re-build if the binary was quarantined |
@@ -114,3 +121,20 @@ Mechanism-level acceptance list:
 - [ ] `--observe` mode clears nothing (edges only).
 - [ ] The clear cap exists (`MAX_CLEARS` in `rc_protocol::consts`; a code
       constant, not expected to trigger in the field).
+
+## 6. Known blocker on Windows 11 26100 (2026-11-09 field test)
+
+The hand-written inline hook on the shared `ntdll!NtDeviceIoControlFile`
+syscall stub is currently **not viable**: with the hook installed, any
+non-target ioctl that completes through a kernel user callback (observed
+with console-driver ioctls, `0x00500016`; the agent's own pipe polling is
+on the same path) faults forever in `KiUserCallbackDispatcher` - processes
+without user32 (WUDFHost included) have a NULL `KernelCallbackTable`. Three
+trampoline designs (direct Rust detour, Detours-style asm relay with a
+pristine pass-through, and a self-contained `syscall; ret` trampoline) all
+reproduce the identical crash, while the un-hooked build passes the whole
+observe chain. Fix candidates under consideration: switching the hook layer
+to frida-gum (the approach proven by the reference ecosystem). Everything
+else verified in the 2026-11-09 field test: BLE device discovery,
+SeDebugPrivilege, DLL deployment location, module verification, and the
+pipe writer fix documented in this guide.

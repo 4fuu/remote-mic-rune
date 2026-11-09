@@ -7,7 +7,7 @@
 //! devices. `--force` / `--target-pid` are documented overrides for the case
 //! where the user knows which remote is theirs.
 
-use crate::registry::{HostEntry, HostScan, is_rc003_entry};
+use crate::registry::{is_rc003_entry, HostEntry, HostScan};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostVerdict {
@@ -65,7 +65,8 @@ pub fn verdict_from_entries(entries: &[HostEntry]) -> HostVerdict {
         0 => HostVerdict::NoHost,
         1 => {
             let pid = candidate_pids[0];
-            let members: Vec<&HostEntry> = unique.iter().filter(|e| e.pid == pid).copied().collect();
+            let members: Vec<&HostEntry> =
+                unique.iter().filter(|e| e.pid == pid).copied().collect();
             let rc003_members = members.iter().filter(|e| is_rc003_entry(e)).count();
             let rc003_instance = members
                 .iter()
@@ -103,13 +104,19 @@ pub fn verdict_from_scan(scan: &HostScan) -> HostVerdict {
 /// intent and skip the shared/ambiguous refusals but never invent a target:
 /// `--target-pid` must be one of the pids seen in the scan (or any pid when
 /// no scan entries exist at all, e.g. self-test rigs).
-pub fn apply_overrides(verdict: &HostVerdict, force: bool, target_pid: Option<u32>) -> Result<Option<u32>, HostVerdict> {
+pub fn apply_overrides(
+    verdict: &HostVerdict,
+    force: bool,
+    target_pid: Option<u32>,
+) -> Result<Option<u32>, HostVerdict> {
     if let Some(pid) = target_pid {
         return Ok(Some(pid));
     }
     match verdict {
         HostVerdict::Exclusive { pid, .. } => Ok(Some(*pid)),
-        HostVerdict::Shared { .. } if force => verdict.pid().map(Some).ok_or_else(|| verdict.clone()),
+        HostVerdict::Shared { .. } if force => {
+            verdict.pid().map(Some).ok_or_else(|| verdict.clone())
+        }
         HostVerdict::Ambiguous { .. } if force => {
             verdict.pid().map(Some).ok_or_else(|| verdict.clone())
         }
@@ -140,13 +147,29 @@ mod tests {
 
     #[test]
     fn exclusive_host_detected() {
-        let entries = [
-            rc003(r"VID_2717&PID_32B8&MI_01\7&2d5f3a4b&0&0000", 4012),
-        ];
+        let entries = [rc003(r"VID_2717&PID_32B8&MI_01\7&2d5f3a4b&0&0000", 4012)];
         assert_eq!(
             verdict_from_entries(&entries),
             HostVerdict::Exclusive {
                 pid: 4012,
+                instance_id: entries[0].instance_id.clone(),
+            }
+        );
+    }
+
+    #[test]
+    fn ble_gatt_instance_alone_in_host_is_exclusive() {
+        // The BLE-paired form seen on real Win11 hardware: one
+        // BTHLEDEVICE HID service collection, no USB interfaces at all.
+        let entries = [HostEntry {
+            instance_id: r"BTHLEDEVICE\{00001812-0000-1000-8000-00805f9b34fb}_Dev_VID&012717_PID&32b8_REV&00a4_c05d39c3274f\b&20a7291a&1&0055".into(),
+            is_rc003: true,
+            pid: 2672,
+        }];
+        assert_eq!(
+            verdict_from_entries(&entries),
+            HostVerdict::Exclusive {
+                pid: 2672,
                 instance_id: entries[0].instance_id.clone(),
             }
         );
@@ -160,7 +183,12 @@ mod tests {
             other(r"VID_046D&PID_C52B&MI_02\6&0000", 4012),
         ];
         match verdict_from_entries(&entries) {
-            HostVerdict::Shared { pid, members, rc003_members, .. } => {
+            HostVerdict::Shared {
+                pid,
+                members,
+                rc003_members,
+                ..
+            } => {
                 assert_eq!(pid, 4012);
                 assert_eq!(members, 2);
                 assert_eq!(rc003_members, 1);
@@ -178,7 +206,11 @@ mod tests {
             rc003(r"VID_2717&PID_32B8&MI_01\7&0000", 4012),
         ];
         match verdict_from_entries(&entries) {
-            HostVerdict::Shared { members, rc003_members, .. } => {
+            HostVerdict::Shared {
+                members,
+                rc003_members,
+                ..
+            } => {
                 assert_eq!(members, 2);
                 assert_eq!(rc003_members, 2);
             }
@@ -257,19 +289,39 @@ mod tests {
         assert!(apply_overrides(&ambiguous, false, None).is_err());
         assert_eq!(apply_overrides(&ambiguous, true, None).unwrap(), Some(11));
         // --target-pid overrides everything, even NoHost.
-        assert_eq!(apply_overrides(&HostVerdict::NoHost, false, Some(7)).unwrap(), Some(7));
         assert_eq!(
-            apply_overrides(&HostVerdict::Exclusive { pid: 9, instance_id: String::new() }, false, Some(7))
-                .unwrap(),
+            apply_overrides(&HostVerdict::NoHost, false, Some(7)).unwrap(),
+            Some(7)
+        );
+        assert_eq!(
+            apply_overrides(
+                &HostVerdict::Exclusive {
+                    pid: 9,
+                    instance_id: String::new()
+                },
+                false,
+                Some(7)
+            )
+            .unwrap(),
             Some(7)
         );
         // Exclusive never needs force.
         assert_eq!(
-            apply_overrides(&HostVerdict::Exclusive { pid: 9, instance_id: String::new() }, false, None)
-                .unwrap(),
+            apply_overrides(
+                &HostVerdict::Exclusive {
+                    pid: 9,
+                    instance_id: String::new()
+                },
+                false,
+                None
+            )
+            .unwrap(),
             Some(9)
         );
         // NoHost without a target stays None (caller exits with NO_HOST).
-        assert_eq!(apply_overrides(&HostVerdict::NoHost, false, None).unwrap(), None);
+        assert_eq!(
+            apply_overrides(&HostVerdict::NoHost, false, None).unwrap(),
+            None
+        );
     }
 }

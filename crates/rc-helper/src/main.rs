@@ -18,7 +18,10 @@
 //! without any teardown, the agent's 2 s lease expiry returns the remote to
 //! native behavior — that fail-open is sacred and nothing here weakens it.
 
-#![cfg_attr(all(target_os = "windows", not(feature = "console")), windows_subsystem = "windows")]
+#![cfg_attr(
+    all(target_os = "windows", not(feature = "console")),
+    windows_subsystem = "windows"
+)]
 // The runtime plumbing below (pipes, injection, teardown) is cfg-gated to
 // Windows; on the host build it is unused by design while the pure decision
 // functions stay testable. Keep that build quiet without hiding anything on
@@ -48,12 +51,12 @@ use logging::Logger;
 // functions it calls into.
 #[cfg(target_os = "windows")]
 use {
-    std::sync::mpsc::{Receiver, RecvTimeoutError, Sender},
-    std::time::{Duration, Instant},
+    agent_link::AgentLink,
+    app_link::AppLink,
     rc_protocol::agent_wire::HelperToAgent,
     rc_protocol::bridge_wire::{
-        all_known_buttons, format_bye, format_edges, format_hello, format_ownership,
-        format_ping, format_recovering, format_synth_ack, format_voice_frame,
+        all_known_buttons, format_bye, format_edges, format_hello, format_ownership, format_ping,
+        format_recovering, format_synth_ack, format_voice_frame,
     },
     rc_protocol::buttons::VOICE_KEY_HID_USAGE,
     rc_protocol::consts::{
@@ -61,8 +64,8 @@ use {
         BRIDGE_PROTOCOL_VERSION, GATE_DELAY_MS, LEASE_RENEW_INTERVAL_MS, RECOVERY_COOLDOWN_MS,
     },
     rc_protocol::handoff::BridgeDescriptor,
-    agent_link::AgentLink,
-    app_link::AppLink,
+    std::sync::mpsc::{Receiver, RecvTimeoutError, Sender},
+    std::time::{Duration, Instant},
 };
 
 /// Combined event bus: links publish, the main loop consumes.
@@ -71,7 +74,9 @@ enum Event {
     Agent(AgentEvent),
     App(AppEvent),
     /// Background recovery attempt finished.
-    RecoveryDone { new_pid: Option<u32> },
+    RecoveryDone {
+        new_pid: Option<u32>,
+    },
 }
 
 static SHUTDOWN: AtomicBool = AtomicBool::new(false);
@@ -84,8 +89,8 @@ fn set_shutdown() {
 fn install_ctrl_handler() {
     use windows::core::BOOL;
     use windows::Win32::System::Console::{
-        SetConsoleCtrlHandler, CTRL_BREAK_EVENT, CTRL_C_EVENT, CTRL_CLOSE_EVENT,
-        CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT,
+        SetConsoleCtrlHandler, CTRL_BREAK_EVENT, CTRL_CLOSE_EVENT, CTRL_C_EVENT, CTRL_LOGOFF_EVENT,
+        CTRL_SHUTDOWN_EVENT,
     };
     unsafe extern "system" fn handler(ctrl: u32) -> BOOL {
         set_shutdown();
@@ -136,7 +141,11 @@ fn main() {
             } else {
                 task::windows_impl::task_status(&logger)
             };
-            std::process::exit(if ok { cli::exit::OK } else { cli::exit::FAILURE });
+            std::process::exit(if ok {
+                cli::exit::OK
+            } else {
+                cli::exit::FAILURE
+            });
         }
         install_ctrl_handler();
         std::process::exit(run(args, logger));
@@ -238,7 +247,9 @@ fn run(args: cli::Args, logger: Arc<Logger>) -> i32 {
         ],
     );
     for (instance, reason) in &scan.read_failures {
-        logger.warn(&format!("[SCAN] unreadable HostPid at {instance}: {reason}"));
+        logger.warn(&format!(
+            "[SCAN] unreadable HostPid at {instance}: {reason}"
+        ));
     }
 
     // 2. Verdict.
@@ -255,7 +266,12 @@ fn run(args: cli::Args, logger: Arc<Logger>) -> i32 {
             );
             return cli::exit::NO_HOST;
         }
-        Err(HostVerdict::Shared { pid, members, rc003_members, .. }) => {
+        Err(HostVerdict::Shared {
+            pid,
+            members,
+            rc003_members,
+            ..
+        }) => {
             logger.error(&format!(
                 "[STOP] refused shared host: pid {pid} hosts {members} device nodes \
                  ({rc003_members} of them RC003). Injecting it would affect the user's \
@@ -297,27 +313,53 @@ fn run(args: cli::Args, logger: Arc<Logger>) -> i32 {
     if args.dry_run {
         println!("plan:");
         println!("  target pid      : {target_pid}");
-        println!("  instance id     : {}", instance_id.as_deref().unwrap_or("-"));
+        println!(
+            "  instance id     : {}",
+            instance_id.as_deref().unwrap_or("-")
+        );
         println!(
             "  agent dll       : {}",
-            args.agent_dll.as_ref().unwrap_or(&default_dll_path()).display()
+            args.agent_dll
+                .as_ref()
+                .unwrap_or(&default_dll_path())
+                .display()
         );
-        println!("  agent pipe      : {AGENT_PIPE_PREFIX}{}", std::process::id());
+        println!(
+            "  agent pipe      : {AGENT_PIPE_PREFIX}{}",
+            std::process::id()
+        );
         println!("  bridge pipe     : {BRIDGE_PIPE_NAME}");
         println!(
             "  descriptor      : {} ({}\\RemoteMicRune\\{BRIDGE_DESCRIPTOR_FILE})",
-            if app_link::read_descriptor(&local_appdata()).is_ok() { "present" } else { "missing" },
+            if app_link::read_descriptor(&local_appdata()).is_ok() {
+                "present"
+            } else {
+                "missing"
+            },
             "%LOCALAPPDATA%"
         );
         println!("  observe         : {}", args.observe);
         println!("  restore         : {}", !args.no_restore);
         println!(
             "  canary usage    : {}",
-            args.canary_usage.map(|u| format!("0x{u:04X}")).unwrap_or_else(|| "-".into())
+            args.canary_usage
+                .map(|u| format!("0x{u:04X}"))
+                .unwrap_or_else(|| "-".into())
         );
         println!("  verdict         : {verdict:?}");
         logger.info("dry-run complete");
         return cli::exit::OK;
+    }
+
+    // 4.5 The target WUDFHost lives in session 0 under a service account;
+    // enable the debug privilege before anything tries to open it. One
+    // adjustment covers the boot injection and every recovery re-inject.
+    match inject::enable_debug_privilege() {
+        Ok(()) => logger.info("[PRIV] SeDebugPrivilege enabled"),
+        Err(e) => logger.warn(&format!(
+            "[PRIV] SeDebugPrivilege not enabled ({e}); opening the session-0 \
+             WUDFHost will likely fail with access denied. Run elevated."
+        )),
     }
 
     // 5. Wait for the app descriptor (needed for the boot token). Under
@@ -350,21 +392,26 @@ fn run(args: cli::Args, logger: Arc<Logger>) -> i32 {
         })
         .ok();
 
-    let agent = Arc::new(match AgentLink::start(
-        pipe_name.clone(),
-        agent_tx,
-        descriptor.token.clone(),
-        logger.clone(),
-    ) {
-        Ok(agent) => agent,
-        Err(e) => {
-            logger.error(&format!("[STOP] agent pipe server failed: {e}"));
-            return cli::exit::FAILURE;
-        }
-    });
+    let agent = Arc::new(
+        match AgentLink::start(
+            pipe_name.clone(),
+            agent_tx,
+            descriptor.token.clone(),
+            logger.clone(),
+        ) {
+            Ok(agent) => agent,
+            Err(e) => {
+                logger.error(&format!("[STOP] agent pipe server failed: {e}"));
+                return cli::exit::FAILURE;
+            }
+        },
+    );
     logger.kv(
         "[AGENT-SERVER]",
-        &[("pipe", pipe_name.clone()), ("sddl", agent_link::AGENT_PIPE_SDDL.to_string())],
+        &[
+            ("pipe", pipe_name.clone()),
+            ("sddl", agent_link::AGENT_PIPE_SDDL.to_string()),
+        ],
     );
 
     // 7. Resolve + validate the agent DLL, then inject (or boot resident).
@@ -378,7 +425,13 @@ fn run(args: cli::Args, logger: Arc<Logger>) -> i32 {
         teardown(&agent, None, &descriptor.token, "missing-dll", &logger);
         return cli::exit::BAD_DLL;
     }
-    logger.kv("[INJECT]", &[("pid", target_pid.to_string()), ("dll", dll.display().to_string())]);
+    logger.kv(
+        "[INJECT]",
+        &[
+            ("pid", target_pid.to_string()),
+            ("dll", dll.display().to_string()),
+        ],
+    );
     if let Err(e) = inject::inject(
         target_pid,
         &dll,
@@ -438,9 +491,7 @@ fn run(args: cli::Args, logger: Arc<Logger>) -> i32 {
                     renew_agent.send(HelperToAgent::Renew {
                         token: runtime_token.clone(),
                     });
-                    std::thread::sleep(Duration::from_millis(
-                        LEASE_RENEW_INTERVAL_MS as u64,
-                    ));
+                    std::thread::sleep(Duration::from_millis(LEASE_RENEW_INTERVAL_MS as u64));
                 }
                 let _ = renew_logger;
             })
@@ -455,14 +506,26 @@ fn run(args: cli::Args, logger: Arc<Logger>) -> i32 {
         // Shutdown / duration first: teardown must not be starved by I/O.
         if SHUTDOWN.load(Ordering::SeqCst) {
             runtime.logger.info("shutdown signal received");
-            teardown(&agent, app.as_ref(), &runtime.token, "signal", &runtime.logger);
+            teardown(
+                &agent,
+                app.as_ref(),
+                &runtime.token,
+                "signal",
+                &runtime.logger,
+            );
             break;
         }
         if runtime.args.duration_secs > 0
             && runtime.start.elapsed() >= Duration::from_secs(runtime.args.duration_secs)
         {
             runtime.logger.info("duration elapsed");
-            teardown(&agent, app.as_ref(), &runtime.token, "duration", &runtime.logger);
+            teardown(
+                &agent,
+                app.as_ref(),
+                &runtime.token,
+                "duration",
+                &runtime.logger,
+            );
             break;
         }
 
@@ -479,19 +542,23 @@ fn run(args: cli::Args, logger: Arc<Logger>) -> i32 {
             if app.is_none() {
                 if let Some(deadline) = app_grace {
                     if Instant::now() >= deadline {
-                        runtime.logger.warn("app link gone past follow-app grace; exiting");
+                        runtime
+                            .logger
+                            .warn("app link gone past follow-app grace; exiting");
                         teardown(&agent, None, &runtime.token, "app-gone", &runtime.logger);
                         break;
                     }
                 }
-                let backoff_until =
-                    connect_backoff.unwrap_or_else(|| Instant::now() + Duration::from_millis(app_link::RECONNECT_BACKOFF_MS));
+                let backoff_until = connect_backoff.unwrap_or_else(|| {
+                    Instant::now() + Duration::from_millis(app_link::RECONNECT_BACKOFF_MS)
+                });
                 if Instant::now() < backoff_until {
                     // Sleep in small slices so shutdown stays responsive.
                     std::thread::sleep(Duration::from_millis(100));
                     continue;
                 }
-                connect_backoff = Some(Instant::now() + Duration::from_millis(app_link::RECONNECT_BACKOFF_MS));
+                connect_backoff =
+                    Some(Instant::now() + Duration::from_millis(app_link::RECONNECT_BACKOFF_MS));
             }
         } else {
             // Ping every second while connected.
@@ -510,7 +577,13 @@ fn run(args: cli::Args, logger: Arc<Logger>) -> i32 {
             if reason.contains("superseded") {
                 // Transport up but no hello inside the auth window: another
                 // helper owns the agent; fighting it would only flap keys.
-                teardown(&agent, app.as_ref(), &runtime.token, &reason, &runtime.logger);
+                teardown(
+                    &agent,
+                    app.as_ref(),
+                    &runtime.token,
+                    &reason,
+                    &runtime.logger,
+                );
                 exit_code = cli::exit::NO_AGENT_HELLO;
                 break;
             }
@@ -523,7 +596,9 @@ fn run(args: cli::Args, logger: Arc<Logger>) -> i32 {
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Event::Agent(event)) => {
                 runtime.handle_agent_event(&agent, app.as_ref(), event);
-                runtime.last_ping = runtime.last_ping.max(Instant::now() - Duration::from_secs(1));
+                runtime.last_ping = runtime
+                    .last_ping
+                    .max(Instant::now() - Duration::from_secs(1));
             }
             Ok(Event::App(event)) => {
                 match event {
@@ -545,7 +620,9 @@ fn run(args: cli::Args, logger: Arc<Logger>) -> i32 {
                 runtime.recovering.store(false, Ordering::SeqCst);
                 runtime.recovery_last_attempt = Some(logging::unix_ms());
                 if let Some(pid) = new_pid {
-                    runtime.logger.info(&format!("recovery injected new host pid {pid}"));
+                    runtime
+                        .logger
+                        .info(&format!("recovery injected new host pid {pid}"));
                     runtime.target_pid = pid;
                 }
                 if let Some(link) = &app {
@@ -556,7 +633,13 @@ fn run(args: cli::Args, logger: Arc<Logger>) -> i32 {
             Err(RecvTimeoutError::Disconnected) => {
                 // All bus senders dropped: should not happen (bus thread holds
                 // one), treat as fatal.
-                teardown(&agent, app.as_ref(), &runtime.token, "internal", &runtime.logger);
+                teardown(
+                    &agent,
+                    app.as_ref(),
+                    &runtime.token,
+                    "internal",
+                    &runtime.logger,
+                );
                 exit_code = cli::exit::FAILURE;
                 break;
             }
@@ -583,15 +666,14 @@ enum AppConnect {
 /// wait for OK/DENY. Both answers arrive asynchronously as AppEvents; this
 /// function only reports transport success.
 #[cfg(target_os = "windows")]
-fn connect_app(
-    runtime: &Runtime,
-    events: Sender<Event>,
-    shutdown: Arc<AtomicBool>,
-) -> AppConnect {
+fn connect_app(runtime: &Runtime, events: Sender<Event>, shutdown: Arc<AtomicBool>) -> AppConnect {
     let descriptor = match app_link::read_descriptor(&local_appdata()) {
         Ok(descriptor) => descriptor,
         Err(e) => {
-            runtime.logger.kv("[APP]", &[("connect", "descriptor_missing".into()), ("detail", e)]);
+            runtime.logger.kv(
+                "[APP]",
+                &[("connect", "descriptor_missing".into()), ("detail", e)],
+            );
             return AppConnect::Failed;
         }
     };
@@ -603,7 +685,11 @@ fn connect_app(
             ("pid", descriptor.pid.to_string()),
         ],
     );
-    let hello = format_hello(BRIDGE_PROTOCOL_VERSION, &descriptor.token, std::process::id());
+    let hello = format_hello(
+        BRIDGE_PROTOCOL_VERSION,
+        &descriptor.token,
+        std::process::id(),
+    );
     let (app_tx, app_rx) = std::sync::mpsc::channel::<AppEvent>();
     let bus_tx = events;
     std::thread::Builder::new()
@@ -633,10 +719,7 @@ fn connect_app(
 /// or `--duration`. An unbounded wait would leave a `--duration` run hanging
 /// before its timer ever starts.
 #[cfg(target_os = "windows")]
-fn wait_for_descriptor(
-    args: &cli::Args,
-    logger: &Logger,
-) -> Option<BridgeDescriptor> {
+fn wait_for_descriptor(args: &cli::Args, logger: &Logger) -> Option<BridgeDescriptor> {
     let mut deadline: Option<Instant> = if args.follow_app {
         Some(Instant::now() + Duration::from_millis(app_link::FOLLOW_APP_GRACE_MS))
     } else {
@@ -680,18 +763,16 @@ fn wait_for_descriptor(
 
 /// Disarm FIRST, then everything else. Best-effort-atomic teardown.
 #[cfg(target_os = "windows")]
-fn teardown(
-    agent: &AgentLink,
-    app: Option<&AppLink>,
-    token: &str,
-    reason: &str,
-    logger: &Logger,
-) {
+fn teardown(agent: &AgentLink, app: Option<&AppLink>, token: &str, reason: &str, logger: &Logger) {
     logger.info(&format!("teardown ({reason}): disarm first"));
     // 1. Disarm (the agent releases any pressed edges immediately).
-    agent.send(HelperToAgent::Disarm { token: token.to_string() });
+    agent.send(HelperToAgent::Disarm {
+        token: token.to_string(),
+    });
     // 2. Everything else after.
-    agent.send(HelperToAgent::Bye { token: token.to_string() });
+    agent.send(HelperToAgent::Bye {
+        token: token.to_string(),
+    });
     if let Some(app) = app {
         // close() sends the BYE line first, then stops the pump.
         app.close(Some(format_bye(reason)));
@@ -742,7 +823,8 @@ impl Runtime {
             return None;
         }
         if !self.agent_hello_seen
-            && self.agent_connected_at.elapsed() >= Duration::from_millis(AGENT_AUTH_TIMEOUT_MS as u64)
+            && self.agent_connected_at.elapsed()
+                >= Duration::from_millis(AGENT_AUTH_TIMEOUT_MS as u64)
         {
             return Some("no hello within auth window (superseded by another helper?)".into());
         }
@@ -757,7 +839,12 @@ impl Runtime {
     /// Recovery state machine entry point. Only when: injected once, no live
     /// agent session, not already recovering, device still present, cooldown
     /// elapsed.
-    fn maybe_start_recovery(&mut self, agent: &AgentLink, app: Option<&AppLink>, events: Sender<Event>) {
+    fn maybe_start_recovery(
+        &mut self,
+        agent: &AgentLink,
+        app: Option<&AppLink>,
+        events: Sender<Event>,
+    ) {
         if !self.injected || self.recovering.load(Ordering::SeqCst) || self.agent_session_live {
             return;
         }
@@ -799,8 +886,8 @@ impl Runtime {
         std::thread::Builder::new()
             .name("recovery".into())
             .spawn(move || {
-                let result = recovery::windows_impl::run_recovery(&instance_id, &logger)
-                    .and_then(|new_pid| {
+                let result = recovery::windows_impl::run_recovery(&instance_id, &logger).and_then(
+                    |new_pid| {
                         inject::inject(new_pid, &dll, &pipe_name, &token, &build, &logger)
                             .map_err(|e| {
                                 logger.error(&format!("recovery re-injection failed: {e}"));
@@ -808,7 +895,8 @@ impl Runtime {
                             })
                             .ok()
                             .map(|_| new_pid)
-                    });
+                    },
+                );
                 recovering_flag.store(false, Ordering::SeqCst);
                 let _ = events.send(Event::RecoveryDone { new_pid: result });
             })
@@ -842,7 +930,8 @@ impl Runtime {
                     ));
                 }
                 if hello.arch != "x64" {
-                    self.logger.warn(&format!("agent reports arch {} (expected x64)", hello.arch));
+                    self.logger
+                        .warn(&format!("agent reports arch {} (expected x64)", hello.arch));
                 }
                 self.logger.kv(
                     "[AGENT-HELLO]",
@@ -862,7 +951,10 @@ impl Runtime {
                     ));
                 }
                 // Post-auth static configuration.
-                agent.send(HelperToAgent::Mode { token: self.token.clone(), clear: !self.observe });
+                agent.send(HelperToAgent::Mode {
+                    token: self.token.clone(),
+                    clear: !self.observe,
+                });
                 agent.send(HelperToAgent::Restore {
                     token: self.token.clone(),
                     on: self.restore_on,
@@ -890,7 +982,9 @@ impl Runtime {
                 self.generation = hb.target_generation;
                 // Heartbeats are dense; log on state flips or every 30 s.
                 let state = (hb.lease_ok, hb.disarmed, hb.connected);
-                if state != self.last_hb_state || self.last_hb_log.elapsed() >= Duration::from_secs(30) {
+                if state != self.last_hb_state
+                    || self.last_hb_log.elapsed() >= Duration::from_secs(30)
+                {
                     self.logger.kv(
                         "[HB]",
                         &[
@@ -899,14 +993,8 @@ impl Runtime {
                             ("connected", hb.connected.to_string()),
                             ("since_renew_ms", hb.since_renew_ms.to_string()),
                             ("generation", hb.target_generation.to_string()),
-                            (
-                                "clears_ok",
-                                hb.stats.clears_ok.to_string(),
-                            ),
-                            (
-                                "canary_hits",
-                                hb.stats.canary_hits.to_string(),
-                            ),
+                            ("clears_ok", hb.stats.clears_ok.to_string()),
+                            ("canary_hits", hb.stats.canary_hits.to_string()),
                         ],
                     );
                     self.last_hb_state = state;
@@ -924,7 +1012,9 @@ impl Runtime {
                         ));
                     }
                 } else {
-                    self.logger.warn("edge received with no app link; dropped (absolute state self-heals)");
+                    self.logger.warn(
+                        "edge received with no app link; dropped (absolute state self-heals)",
+                    );
                 }
             }
             AgentEvent::TargetsAck { generation, usages } => {
@@ -969,7 +1059,11 @@ impl Runtime {
 
     fn handle_app_event(&mut self, agent: &AgentLink, event: AppEvent) {
         match event {
-            AppEvent::Ok { version, generation, usages } => {
+            AppEvent::Ok {
+                version,
+                generation,
+                usages,
+            } => {
                 if version != BRIDGE_PROTOCOL_VERSION {
                     self.logger.error(&format!(
                         "app OK carries version {version}, helper speaks {BRIDGE_PROTOCOL_VERSION}; \
@@ -1017,8 +1111,9 @@ impl Runtime {
                 // DENY: the token we sent does not match; the app may have
                 // rotated it. Re-read the descriptor so the next HELLO (the
                 // reconnect below) carries the fresh token.
-                self.logger
-                    .warn(&format!("app denied hello: {reason}; re-reading descriptor"));
+                self.logger.warn(&format!(
+                    "app denied hello: {reason}; re-reading descriptor"
+                ));
                 if let Ok(descriptor) = app_link::read_descriptor(&local_appdata()) {
                     self.token = descriptor.token;
                     // The next agent hello must present this token.
@@ -1026,9 +1121,14 @@ impl Runtime {
                 }
             }
             AppEvent::Bye { reason } => {
-                self.logger.warn(&format!("app said bye ({reason}); disarming agent"));
-                agent.send(HelperToAgent::Disarm { token: self.token.clone() });
-                agent.send(HelperToAgent::Bye { token: self.token.clone() });
+                self.logger
+                    .warn(&format!("app said bye ({reason}); disarming agent"));
+                agent.send(HelperToAgent::Disarm {
+                    token: self.token.clone(),
+                });
+                agent.send(HelperToAgent::Bye {
+                    token: self.token.clone(),
+                });
                 self.last_targets = None;
             }
             AppEvent::Disconnected => {

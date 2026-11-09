@@ -126,6 +126,14 @@ pub const REPEAT_START_DELAY_MS: u64 = 350;
 pub const DEVICE_VID: &str = "VID_2717";
 pub const DEVICE_PID: &str = "PID_32B8";
 
+/// The same RC003, paired over Bluetooth LE, never appears under `Enum\HID`:
+/// Windows enumerates its HID-over-GATT service as
+/// `BTHLEDEVICE\{00001812-...}_DEV_VID&012717_PID&32B8_REV&..._MAC`. The
+/// Bluetooth form encodes the ids as `VID&<source><hex>` (`01` = Bluetooth
+/// SIG vendor source), so it needs its own match fragments.
+pub const DEVICE_VID_BT: &str = "VID&012717";
+pub const DEVICE_PID_BT: &str = "PID&32B8";
+
 /// Registry suffix under a device instance key that carries `HostPid`
 /// (the PID of the WUDFHost.exe hosting the device).
 pub const WUDF_DIAG_SUFFIX: &str = r"Device Parameters\WUDFDiagnosticInfo";
