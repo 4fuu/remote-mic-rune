@@ -7,6 +7,7 @@
 mod bridge_api;
 mod chord;
 mod engine;
+mod i18n;
 mod mappings;
 mod real;
 mod remote_photo;
@@ -35,6 +36,10 @@ fn main() {
         .as_deref()
         .map(settings::load)
         .unwrap_or(settings::Loaded { settings: Default::default(), warning: None });
+    // The UI language, resolved once for everything built before the app
+    // runs (launch errors, the pump's fatal notice, the tray menu); the
+    // window itself re-reads AppState::lang every frame.
+    let lang = loaded.settings.language.resolve();
 
     // 2. Bridge + engine through the seam. Real crates by default; --demo
     //    keeps the deterministic stubs (host demos and UI tests use them).
@@ -46,7 +51,7 @@ fn main() {
                 Some(Arc::clone(&stub) as SharedBridge),
                 Some(service::StubEngine::new() as SharedEngine),
             ),
-            Err(err) => (Some(err.message()), None, None),
+            Err(err) => (Some(err.message(lang)), None, None),
         }
     } else {
         match real::start(engine_tx) {
@@ -55,7 +60,7 @@ fn main() {
                 Some(Arc::clone(&real_bridge) as SharedBridge),
                 Some(real_engine as SharedEngine),
             ),
-            Err(err) => (Some(err.message()), None, None),
+            Err(err) => (Some(err.message(lang)), None, None),
         }
     };
 
@@ -64,6 +69,7 @@ fn main() {
         mappings: loaded.settings.mappings.clone(),
         capture_enabled: loaded.settings.capture_enabled,
         voice_synth_to: loaded.settings.valid_voice_synth(),
+        lang,
     };
 
     // 3. The Rune app and its handle (background threads talk to the UI
@@ -115,7 +121,7 @@ fn main() {
     }
 
     // 5. Tray icon (best effort; unsupported platforms just skip it).
-    tray::spawn(handle);
+    tray::spawn(handle, lang);
 
     app.run();
 }

@@ -110,15 +110,17 @@ pub enum StartError {
 }
 
 impl StartError {
-    /// The user-facing message; the single-instance case is its own screen.
-    pub fn message(&self) -> String {
+    /// The user-facing message in the UI's language; the single-instance
+    /// case is its own screen.
+    pub fn message(&self, lang: crate::i18n::Lang) -> String {
+        use crate::i18n::tr_fmt;
         match self {
-            StartError::AnotherInstance => {
+            StartError::AnotherInstance => tr_fmt!(
+                lang,
                 "Another instance of Remote Mic Rune is already running. \
                  Only one app can own the bridge pipe at a time."
-                    .to_string()
-            }
-            StartError::Failed(why) => format!("The bridge could not start: {why}"),
+            ),
+            StartError::Failed(why) => tr_fmt!(lang, "The bridge could not start: {}", why),
         }
     }
 }

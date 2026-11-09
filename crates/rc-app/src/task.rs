@@ -8,12 +8,18 @@
 //! - Windows-only execution: `CREATE_NO_WINDOW` on every console process, a
 //!   wait timeout that kills hung children, and `ShellExecuteW` with the
 //!   `runas` verb for the UAC prompts.
+//!
+//! The status labels and error strings take the UI's [`Lang`] so the app
+//! shows them localized; output parsed from schtasks/rc-helper stays
+//! whatever those tools printed (embedded verbatim into `Unknown`).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
 use rc_protocol::consts::TASK_NAME;
+
+use crate::i18n::{tr, tr_fmt, Lang};
 
 /// The helper binary, expected in the same directory as rc-app.exe.
 pub const HELPER_EXE: &str = "rc-helper.exe";
@@ -80,12 +86,12 @@ pub enum TaskStatus {
 }
 
 impl TaskStatus {
-    pub fn label(&self) -> String {
+    pub fn label(&self, lang: Lang) -> String {
         match self {
-            TaskStatus::NotInstalled => "Task not installed".to_string(),
-            TaskStatus::Ready => "Task installed, helper not running".to_string(),
-            TaskStatus::Running => "Task running".to_string(),
-            TaskStatus::Unknown(text) => format!("Task status: {text}"),
+            TaskStatus::NotInstalled => tr(lang, "Task not installed").to_string(),
+            TaskStatus::Ready => tr(lang, "Task installed, helper not running").to_string(),
+            TaskStatus::Running => tr(lang, "Task running").to_string(),
+            TaskStatus::Unknown(text) => tr_fmt!(lang, "Task status: {}", text),
         }
     }
 }
@@ -93,10 +99,10 @@ impl TaskStatus {
 /// Parse `rc-helper.exe --task-status` output. The helper contract is one
 /// short line containing one of `running`, `ready`/`installed`, or
 /// `not installed`/`missing`/`absent`; anything else is shown verbatim.
-pub fn parse_task_status(stdout: &str) -> TaskStatus {
+pub fn parse_task_status(lang: Lang, stdout: &str) -> TaskStatus {
     let line = stdout.trim();
     if line.is_empty() {
-        return TaskStatus::Unknown("no output".to_string());
+        return TaskStatus::Unknown(tr(lang, "no output").to_string());
     }
     let lower = line.to_ascii_lowercase();
     if lower.contains("running") {
@@ -110,7 +116,9 @@ pub fn parse_task_status(stdout: &str) -> TaskStatus {
     }
 }
 
-/// Parse `schtasks /query /tn <task>` output (fallback path).
+/// Parse `schtasks /query /tn <task>` output (fallback path). Unrecognized
+/// output is embedded verbatim — schtasks prints in the OS's language, not
+/// the app's.
 pub fn parse_schtasks_query(stdout: &str) -> TaskStatus {
     let lower = stdout.to_ascii_lowercase();
     if lower.contains("the system cannot find") || lower.contains("does not exist") {
@@ -158,7 +166,12 @@ impl RunOutput {
 /// Run a console program, hide its window, capture its output and enforce a
 /// timeout. Pipes are drained by reader threads, so children that write more
 /// than the OS pipe buffer cannot deadlock the wait.
-pub fn run_capture(program: &str, args: &[String], timeout: Duration) -> Result<RunOutput, String> {
+pub fn run_capture(
+    lang: Lang,
+    program: &str,
+    args: &[String],
+    timeout: Duration,
+) -> Result<RunOutput, String> {
     let mut cmd = Command::new(program);
     cmd.args(args);
     hide_window(&mut cmd);
@@ -166,7 +179,9 @@ pub fn run_capture(program: &str, args: &[String], timeout: Duration) -> Result<
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
-    let mut child = cmd.spawn().map_err(|e| format!("cannot start {program}: {e}"))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| tr_fmt!(lang, "cannot start {}: {}", program, e))?;
     let stdout_rx = drain_pipe(child.stdout.take());
     let stderr_rx = drain_pipe(child.stderr.take());
 
@@ -197,7 +212,7 @@ pub fn run_capture(program: &str, args: &[String], timeout: Duration) -> Result<
                 break None;
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(15)),
-            Err(e) => return Err(format!("{program} failed: {e}")),
+            Err(e) => return Err(tr_fmt!(lang, "{} failed: {}", program, e)),
         }
     };
     // The pipes close when the child dies, so the readers finish on their own.
@@ -236,12 +251,16 @@ fn hide_window(cmd: &mut Command) {
 }
 
 /// Path of rc-helper.exe next to the running app.
-pub fn helper_path() -> Result<PathBuf, String> {
-    let exe = std::env::current_exe().map_err(|e| format!("cannot locate the app executable: {e}"))?;
-    let dir = exe.parent().ok_or("the app executable has no parent directory")?;
+pub fn helper_path(lang: Lang) -> Result<PathBuf, String> {
+    let exe = std::env::current_exe()
+        .map_err(|e| tr_fmt!(lang, "cannot locate the app executable: {}", e))?;
+    let dir = exe
+        .parent()
+        .ok_or_else(|| tr(lang, "the app executable has no parent directory").to_string())?;
     let helper = dir.join(HELPER_EXE);
     if !helper.exists() {
-        return Err(format!(
+        return Err(tr_fmt!(
+            lang,
             "{} not found next to the app; install the helper build into the same directory",
             HELPER_EXE
         ));
@@ -250,45 +269,45 @@ pub fn helper_path() -> Result<PathBuf, String> {
 }
 
 /// Run one helper/schtasks command that needs no elevation.
-pub fn run_plain(program: &str, args: &[String]) -> Result<RunOutput, String> {
-    run_capture(program, args, COMMAND_TIMEOUT)
+pub fn run_plain(lang: Lang, program: &str, args: &[String]) -> Result<RunOutput, String> {
+    run_capture(lang, program, args, COMMAND_TIMEOUT)
 }
 
 /// Install the scheduled task with exactly one UAC prompt
 /// (`ShellExecuteW` "runas" on `rc-helper.exe --install-task`).
-pub fn install_task(helper: &Path) -> Result<(), String> {
-    run_elevated(helper, helper_install_args())
+pub fn install_task(lang: Lang, helper: &Path) -> Result<(), String> {
+    run_elevated(lang, helper, helper_install_args())
 }
 
 /// Remove the scheduled task (one UAC prompt, as removal needs elevation too).
-pub fn remove_task(helper: &Path) -> Result<(), String> {
-    run_elevated(helper, helper_remove_args())
+pub fn remove_task(lang: Lang, helper: &Path) -> Result<(), String> {
+    run_elevated(lang, helper, helper_remove_args())
 }
 
 /// Start the helper task without a prompt (`schtasks /run`).
-pub fn start_task() -> Result<RunOutput, String> {
+pub fn start_task(lang: Lang) -> Result<RunOutput, String> {
     let args = schtasks_run_args(TASK_NAME);
-    run_plain(schtasks_program(), &args)
+    run_plain(lang, schtasks_program(), &args)
 }
 
 /// Stop the running task instance (`schtasks /end`). The bridge keeps
 /// running; the helper also exits on app disconnect by design.
-pub fn stop_task() -> Result<RunOutput, String> {
+pub fn stop_task(lang: Lang) -> Result<RunOutput, String> {
     let args = schtasks_end_args(TASK_NAME);
-    run_plain(schtasks_program(), &args)
+    run_plain(lang, schtasks_program(), &args)
 }
 
 /// Ask the helper binary (or schtasks, as fallback) for the task status.
-pub fn query_task_status() -> Result<TaskStatus, String> {
-    if let Ok(helper) = helper_path() {
+pub fn query_task_status(lang: Lang) -> Result<TaskStatus, String> {
+    if let Ok(helper) = helper_path(lang) {
         let args: Vec<String> = helper_status_args().iter().map(|s| s.to_string()).collect();
-        let out = run_plain(&helper.to_string_lossy(), &args)?;
+        let out = run_plain(lang, &helper.to_string_lossy(), &args)?;
         if out.ok() || !out.stdout.trim().is_empty() {
-            return Ok(parse_task_status(&out.stdout));
+            return Ok(parse_task_status(lang, &out.stdout));
         }
-        return Ok(parse_task_status(&out.stderr));
+        return Ok(parse_task_status(lang, &out.stderr));
     }
-    let out = run_plain(schtasks_program(), &schtasks_query_args(TASK_NAME))?;
+    let out = run_plain(lang, schtasks_program(), &schtasks_query_args(TASK_NAME))?;
     if !out.ok() && out.stdout.trim().is_empty() {
         return Ok(TaskStatus::NotInstalled);
     }
@@ -304,7 +323,7 @@ pub fn query_task_status() -> Result<TaskStatus, String> {
 /// not available through ShellExecuteW; success is its "greater than 32"
 /// contract.
 #[cfg(windows)]
-pub fn run_elevated(program: &Path, args: &[&str]) -> Result<(), String> {
+pub fn run_elevated(lang: Lang, program: &Path, args: &[&str]) -> Result<(), String> {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
 
@@ -330,8 +349,10 @@ pub fn run_elevated(program: &Path, args: &[&str]) -> Result<(), String> {
     if result >= SE_ERR_SUCCESS_MIN {
         Ok(())
     } else {
-        Err(format!(
-            "elevated launch failed (ShellExecuteW returned {result}); the UAC prompt may have been cancelled"
+        Err(tr_fmt!(
+            lang,
+            "elevated launch failed (ShellExecuteW returned {}); the UAC prompt may have been cancelled",
+            result
         ))
     }
 }
@@ -353,8 +374,8 @@ mod shell32 {
 
 /// Non-Windows stand-in: the buttons report clearly instead of pretending.
 #[cfg(not(windows))]
-pub fn run_elevated(_program: &Path, _args: &[&str]) -> Result<(), String> {
-    Err("elevation (UAC) is only available on Windows".to_string())
+pub fn run_elevated(lang: Lang, _program: &Path, _args: &[&str]) -> Result<(), String> {
+    Err(tr(lang, "elevation (UAC) is only available on Windows").to_string())
 }
 
 #[cfg(test)]
@@ -378,13 +399,38 @@ mod tests {
 
     #[test]
     fn task_status_lines_are_recognized() {
-        assert_eq!(parse_task_status("running"), TaskStatus::Running);
-        assert_eq!(parse_task_status("READY"), TaskStatus::Ready);
-        assert_eq!(parse_task_status("installed, idle"), TaskStatus::Ready);
-        assert_eq!(parse_task_status("not installed"), TaskStatus::NotInstalled);
-        assert_eq!(parse_task_status("missing"), TaskStatus::NotInstalled);
-        assert_eq!(parse_task_status(""), TaskStatus::Unknown("no output".into()));
-        assert_eq!(parse_task_status("weird state"), TaskStatus::Unknown("weird state".into()));
+        assert_eq!(parse_task_status(Lang::En, "running"), TaskStatus::Running);
+        assert_eq!(parse_task_status(Lang::En, "READY"), TaskStatus::Ready);
+        assert_eq!(
+            parse_task_status(Lang::En, "installed, idle"),
+            TaskStatus::Ready
+        );
+        assert_eq!(
+            parse_task_status(Lang::En, "not installed"),
+            TaskStatus::NotInstalled
+        );
+        assert_eq!(
+            parse_task_status(Lang::En, "missing"),
+            TaskStatus::NotInstalled
+        );
+        assert_eq!(
+            parse_task_status(Lang::En, ""),
+            TaskStatus::Unknown("no output".into())
+        );
+        assert_eq!(
+            parse_task_status(Lang::En, "weird state"),
+            TaskStatus::Unknown("weird state".into())
+        );
+        // The no-output placeholder translates with the UI language.
+        assert_eq!(
+            parse_task_status(Lang::Zh, ""),
+            TaskStatus::Unknown("无输出".into())
+        );
+        assert_eq!(
+            TaskStatus::Unknown("weird state".into()).label(Lang::Zh),
+            "任务状态：weird state"
+        );
+        assert_eq!(TaskStatus::Running.label(Lang::Zh), "任务运行中");
     }
 
     #[test]
@@ -407,7 +453,7 @@ ERROR: The system cannot find the file specified.\n";
         let (program, args) = ("cmd.exe", vec!["/c".to_string(), "echo hello".to_string()]);
         #[cfg(not(windows))]
         let (program, args) = ("/bin/echo", vec!["hello".to_string()]);
-        let out = run_capture(program, &args, COMMAND_TIMEOUT).unwrap();
+        let out = run_capture(Lang::En, program, &args, COMMAND_TIMEOUT).unwrap();
         assert!(out.ok());
         assert!(!out.timed_out);
         assert!(out.stdout.trim().contains("hello"), "stdout: {:?}", out.stdout);
@@ -420,14 +466,28 @@ ERROR: The system cannot find the file specified.\n";
         #[cfg(not(windows))]
         let (program, args) = ("/bin/sleep", vec!["30".to_string()]);
         let started = Instant::now();
-        let out = run_capture(program, &args, Duration::from_millis(300)).unwrap();
+        let out = run_capture(Lang::En, program, &args, Duration::from_millis(300)).unwrap();
         assert!(out.timed_out);
         assert!(started.elapsed() < Duration::from_secs(5), "the kill must happen promptly");
     }
 
     #[test]
     fn run_capture_reports_missing_programs_without_panicking() {
-        let err = run_capture("rc-app-definitely-not-a-program", &[], Duration::from_secs(1)).unwrap_err();
+        let err = run_capture(
+            Lang::En,
+            "rc-app-definitely-not-a-program",
+            &[],
+            Duration::from_secs(1),
+        )
+        .unwrap_err();
         assert!(err.contains("cannot start"), "error: {err}");
+        let err = run_capture(
+            Lang::Zh,
+            "rc-app-definitely-not-a-program",
+            &[],
+            Duration::from_secs(1),
+        )
+        .unwrap_err();
+        assert!(err.starts_with("无法启动"), "error: {err}");
     }
 }
