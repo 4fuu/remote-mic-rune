@@ -16,6 +16,7 @@
 //! natively.
 
 pub mod clock;
+#[cfg(target_os = "windows")]
 pub mod diag;
 pub mod frames;
 pub mod report;
