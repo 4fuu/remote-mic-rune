@@ -528,12 +528,16 @@ mod tests {
         let mut settings = settings_with_mappings();
         settings.window.dark = Some(false); // the SwiftUI-style light look
         settings.capture_enabled = true;
-        for (name, section) in [
-            ("status", Section::Status),
-            ("capture", Section::Capture),
-            ("buttons", Section::Buttons),
-            ("helper", Section::Helper),
-            ("settings", Section::Settings),
+        // `buttons` renders narrow (the scale-down regression case) and
+        // `buttons-wide` at the window the app now opens at: cards pin to the
+        // content edges, the photo stays centered, sizes stay at scale 1.
+        for (name, section, win_w) in [
+            ("status", Section::Status, 780.0),
+            ("capture", Section::Capture, 780.0),
+            ("buttons", Section::Buttons, 780.0),
+            ("helper", Section::Helper, 780.0),
+            ("settings", Section::Settings, 780.0),
+            ("buttons-wide", Section::Buttons, 1180.0),
         ] {
             let mut state = AppState::for_test(settings.clone());
             state.section = section;
@@ -546,10 +550,10 @@ mod tests {
             // The mapping canvas is fixed geometry: render it in a window
             // tall enough to show the whole canvas (intro, the canvas itself,
             // and the volume_mute card below it).
-            let (win_w, win_h) = if section == Section::Buttons {
-                (780.0, crate::views::mapping_canvas_h(&state) + 290.0)
+            let win_h = if section == Section::Buttons {
+                crate::views::mapping_canvas_h(&state) + 290.0
             } else {
-                (780.0, 720.0)
+                720.0
             };
             let (w, h) = ((win_w * 2.0) as u32, (win_h * 2.0) as u32); // 2x scale
             let mut rt = rune::Runtime::new(state, view, (win_w, win_h), rune::Env::new(false, 2.0));

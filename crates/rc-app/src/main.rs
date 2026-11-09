@@ -69,7 +69,8 @@ fn main() {
     // 3. The Rune app and its handle (background threads talk to the UI
     //    only through it).
     let app = App::new(rune::AppSpec::<ui::AppState> {
-        ..rune::AppSpec::new("Remote Mic Rune", (960.0, 780.0), ui::AppState::from_startup, ui::view)
+        min_size: Some((1000.0, 680.0)),
+        ..rune::AppSpec::new("Remote Mic Rune", (1180.0, 820.0), ui::AppState::from_startup, ui::view)
     });
     let handle = app.handle();
 
