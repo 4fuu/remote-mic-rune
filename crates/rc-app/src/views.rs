@@ -26,10 +26,19 @@ use crate::ui::{AppState, HelperCommand, PICKER_OPTIONS, Section, slot_key};
 
 // -- SwiftUI-flavoured type scale -------------------------------------------
 
-/// Window title (navigation bar, 20 pt bold).
-const LARGE_TITLE: TextStyle = TextStyle::new(20.0, 700.0);
+/// The titlebar band's height, in points, the app draws itself: `main.rs`
+/// declares the same through `App::titlebar`, so Rune takes the native
+/// Windows title bar away and keeps its caption buttons over this band's
+/// trailing edge (Linux keeps the native frame; the band reads as a toolbar).
+pub(crate) const TITLEBAR_HEIGHT: f32 = 46.0;
+
+/// The app title inside the custom titlebar band (15 pt semibold): window
+/// chrome, a step below the pages' own 16 pt titles.
+const TITLEBAR_TITLE: TextStyle = TextStyle::new(15.0, 650.0);
 /// Card headlines / row labels (13 pt semibold).
 const HEADLINE: TextStyle = TextStyle::new(13.0, 600.0);
+/// The launch-error card's headline (20 pt bold).
+const ERROR_TITLE: TextStyle = TextStyle::new(20.0, 700.0);
 /// Secondary captions (11 pt regular) — SwiftUI footnote.
 const FOOTNOTE: TextStyle = TextStyle::new(11.0, 400.0);
 /// Small section headers above cards (SwiftUI uppercase header).
@@ -58,33 +67,50 @@ pub fn swiftui_kit(dark: bool) -> Kit {
 
 // -- Form primitives ---------------------------------------------------------
 
-/// The whole window.
+/// The whole window: a self-drawn titlebar band (Rune replaces the native
+/// Windows title bar through `App::titlebar` in `main.rs`), then the page.
 pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     let dark = s.settings.window.dark.unwrap_or(cx.system_dark());
     let k = swiftui_kit(dark);
+    // The Windows caption buttons' glyphs follow the app's theme rather than
+    // the system's, so Auto/Light/Dark keeps them readable over the band
+    // (inert on Linux and macOS, which draw no caption buttons).
+    cx.caption_color(k.c.text_base);
+    // The band stays clear of the window's own controls: macOS traffic lights
+    // at the leading edge, the Windows caption buttons at the trailing edge
+    // (zero here — Linux keeps the native frame, headless runs report that).
+    let insets = cx.chrome_insets();
     let mut layer = Vec::new();
 
-    let mut window = col().key("window").w_full().h_full().fill(k.c.page);
-
-    let mut head = row()
-        .key("nav-bar")
+    let titlebar = row()
+        .key("titlebar")
+        .role("toolbar")
         .w_full()
+        .h(TITLEBAR_HEIGHT)
         .center_y()
         .gap(space::S2)
-        .px(space::S6)
-        .pt(16.0)
-        .pb(space::S2);
-    head = head.child(
-        text("Remote Mic Rune").key("title").font(LARGE_TITLE).color(k.c.text_base),
-    );
-    head = head.child(
-        text(format!("v{}", env!("CARGO_PKG_VERSION")))
-            .font(FOOTNOTE)
-            .color(k.c.text_faint),
-    );
-    head = head.child(el().grow(1.0));
-    head = head.child(badge_for_phase(&s.bridge, &k));
-    window = window.child(head);
+        .pl(insets.leading + 16.0)
+        .pr(insets.trailing + 12.0)
+        .fill(k.c.bg_base)
+        .window_drag()
+        .child(
+            text("Remote Mic Rune")
+                .key("title")
+                .font(TITLEBAR_TITLE)
+                .color(k.c.text_base),
+        )
+        .child(
+            text(format!("v{}", env!("CARGO_PKG_VERSION")))
+                .font(FOOTNOTE)
+                .color(k.c.text_faint),
+        )
+        .child(el().grow(1.0))
+        .child(badge_for_phase(&s.bridge, &k));
+
+    let mut window = col().key("window").w_full().h_full().fill(k.c.page);
+    window = window.child(titlebar);
+    // Hairline under the band, mirroring the bottom bar's top line.
+    window = window.child(el().key("titlebar-bottom-line").h(1.0).w_full().fill(k.c.border_muted));
 
     if let Some(warning) = &s.warning {
         window = window.child(callout(warning, &k, k.c.warning.bg, k.c.warning.fg));
@@ -170,7 +196,7 @@ fn error_overlay(message: &str, k: &Kit) -> El {
                 .child(
                     text("Cannot start")
                         .key("error-title")
-                        .font(LARGE_TITLE)
+                        .font(ERROR_TITLE)
                         .color(k.c.text_base),
                 )
                 .child(text(message.to_string()).wrap().font(HEADLINE).color(k.c.text_muted))
