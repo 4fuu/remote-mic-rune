@@ -123,6 +123,10 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
             .w_full()
             .justify_center()
             .px(space::S6)
+            // Breathing room under the titlebar: the tabs belong to the page
+            // below, not to the window chrome, so the larger gap sits above
+            // them and the smaller one separates them from the content.
+            .pt(space::S6)
             .pb(space::S3)
             .child(
                 SegmentedControl::new(&Section::labels(s.lang), Some(s.section.index()))
