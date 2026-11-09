@@ -113,3 +113,10 @@ each stage separately before the full UI chain.
 ## License
 
 Original codebase, MIT. The UI is built on Rune (MIT).
+
+## Acknowledgments
+
+- [remote-mic-app-windows](https://github.com/GetSayAll/remote-mic-app-windows)
+  (无线麦 SayAll for Windows) — the idea of turning the Xiaomi Bluetooth
+  remotes into a Windows controller, including device bring-up and per-button
+  key mapping, was inspired by this project.
