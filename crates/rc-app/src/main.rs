@@ -67,11 +67,14 @@ fn main() {
     };
 
     // 3. The Rune app and its handle (background threads talk to the UI
-    //    only through it).
+    //    only through it). The titlebar height must match the band the view
+    //    draws (`views::TITLEBAR_HEIGHT`): Rune takes the native Windows
+    //    title bar away and draws its caption buttons over that band.
     let app = App::new(rune::AppSpec::<ui::AppState> {
         min_size: Some((1000.0, 680.0)),
         ..rune::AppSpec::new("Remote Mic Rune", (1180.0, 820.0), ui::AppState::from_startup, ui::view)
-    });
+    })
+    .titlebar(rune::Titlebar::new(views::TITLEBAR_HEIGHT));
     let handle = app.handle();
 
     // Startup data for `init` (fn() -> S cannot take arguments).

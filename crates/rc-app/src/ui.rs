@@ -742,9 +742,41 @@ mod tests {
         let mut rt = rune::Runtime::new(AppState::for_test(settings_with_mappings()), view, (760.0, 680.0), rune::Env::new(true, 1.0));
         rt.frame(0.0);
         assert!(rt.find("title").is_some(), "window title renders");
+        // The custom titlebar band: the window's full-width top band at the
+        // declared height, with the folded-in title inside it and the page
+        // content starting below the band.
+        let band = rt.presented("titlebar").expect("titlebar band renders").0;
+        assert_eq!(band[0], 0.0, "band spans from the window's leading edge");
+        assert!((band[1]).abs() < 0.5, "band sits at the window's top: {:?}", band);
+        assert!(
+            (band[2] - 760.0).abs() < 0.5 && (band[3] - crate::views::TITLEBAR_HEIGHT).abs() < 0.5,
+            "band spans the window at the titlebar height: {:?}",
+            band
+        );
+        let (tx, ty) = rt.find("title").expect("title renders");
+        assert!(
+            ty > band[1] && ty < band[1] + band[3],
+            "title sits inside the band: ({tx}, {ty}) vs {:?}",
+            band
+        );
         assert!(rt.find("section-tabs").is_some(), "section tabs render");
+        let tabs = rt.presented("section-tabs").expect("section tabs render").0;
+        assert!(
+            tabs[1] >= band[1] + band[3],
+            "page content starts below the band: tabs {:?} vs band {:?}",
+            tabs,
+            band
+        );
         assert!(rt.find("kv-phase-value").is_some(), "status section shows by default");
         assert!(rt.find("phase-badge").is_some(), "phase badge renders");
+        // The badge is folded into the band too, and stays inside it.
+        let badge = rt.presented("phase-badge").expect("phase badge renders").0;
+        assert!(
+            badge[1] >= band[1] && badge[1] + badge[3] <= band[1] + band[3],
+            "badge sits inside the band: {:?} vs {:?}",
+            badge,
+            band
+        );
         // Default bridge phase is Stopped, so the idle guidance card shows.
         assert!(
             rt.find("group-getting-started").is_some(),
