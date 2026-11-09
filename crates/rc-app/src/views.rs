@@ -537,7 +537,7 @@ const LINE_W: f32 = 1.5;
 /// Air the canvas height keeps between stacked cards and at its edges.
 const CANVAS_GAP: f32 = 10.0;
 const CANVAS_EDGE: f32 = 8.0;
-/// The reference canvas' height: the 508-pt photo fills all but a `PHOTO_BAND_Y`
+/// The canvas' design height: the 508-pt photo fills all but a `PHOTO_BAND_Y`
 /// margin on each side, and the six compact rows per column span nearly the
 /// photo's whole band (see `PLACEMENTS`' `target_y` fractions).
 const CANVAS_MIN_H: f32 = 570.0;
@@ -896,7 +896,7 @@ fn button_card(s: &AppState, button: RemoteButton, k: &Kit, layer: &mut Vec<El>,
 fn buttons_section(s: &AppState, k: &Kit, layer: &mut Vec<El>) -> El {
     let canvas_h = mapping_canvas_h(s);
     // The canvas reports its laid-out width back into state, so the spatial
-    // geometry scales with the window: photo and cards hold the reference
+    // geometry scales with the window: photo and cards hold the design
     // canvas' proportions down to ~0.86 scale (the 780-pt snapshot renders
     // ~0.915), and card text keeps its size throughout.
     let g = CanvasGeom::for_width(s.buttons_canvas_w, canvas_h);

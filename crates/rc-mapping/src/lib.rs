@@ -11,8 +11,8 @@
 //!
 //! Driver model: the engine has no internal thread. The application calls
 //! [`MappingEngine::handle`] for every bridge edge event and
-//! [`MappingEngine::tick`] on a fixed cadence (the reference driver contract
-//! is 25 ms). See `engine.rs` for details.
+//! [`MappingEngine::tick`] on a fixed cadence (25 ms in the current driver
+//! model). See `engine.rs` for details.
 
 pub mod actions;
 pub mod engine;

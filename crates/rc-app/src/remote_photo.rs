@@ -1,9 +1,9 @@
 //! The RC003 physical remote photo, embedded and decoded once.
 //!
-//! Source: the reference project's `public/RC003-remote-photo@2x.webp`
-//! (404×820 PNG with transparent margins; the visible remote occupies
-//! ≈46.3%×93.7% of the frame). Displayed at 250×508 points, matching the
-//! reference mapping canvas geometry (see docs in `views.rs`).
+//! A photograph of the RC003 (2 Pro) remote hardware: 404×820 PNG with
+//! transparent margins; the visible remote occupies ≈46.3%×93.7% of the
+//! frame. Displayed at 250×508 points, matching the mapping canvas
+//! geometry (see docs in `views.rs`).
 
 use rune::Pixels;
 

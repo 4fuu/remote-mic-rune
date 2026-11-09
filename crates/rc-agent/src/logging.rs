@@ -68,9 +68,8 @@ pub fn log_event(msg: &str) {
     });
 }
 
-/// Rate-limited synthesis frame trace (reference `synthTrace` semantics:
-/// 8 lines per second, the overflow counted and carried on the next line
-/// that does get through).
+/// Rate-limited synthesis frame trace (8 lines per second, the overflow
+/// counted and carried on the next line that does get through).
 pub fn synth_trace(msg: &str) {
     let now = unix_ms();
     let mut t = match TRACE.lock() {

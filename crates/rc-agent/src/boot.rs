@@ -8,8 +8,8 @@
 //! against different contracts, so the agent stays dormant.
 //!
 //! `DllMain` deliberately does nothing but `DisableThreadLibraryCalls`:
-//! doing real work under the loader lock is exactly the class of bug the
-//! reference avoided by letting the helper drive boot.
+//! doing real work under the loader lock is a classic source of deadlocks,
+//! so the helper drives boot instead.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 

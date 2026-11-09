@@ -10,9 +10,9 @@
 //! REG_QWORD (8 bytes); a reader hardcoded to 4 bytes fails with
 //! ERROR_MORE_DATA (234) and — if that failure is swallowed — produces a
 //! "0 instances" scan that masquerades as "device not connected". That
-//! false negative cost a real-device session in the reference project, so
-//! both widths (and REG_BINARY with matching width) are decoded here and
-//! every failure mode is kept distinct and counted.
+//! false negative is indistinguishable from a disconnected device unless
+//! every failure mode is kept distinct, so both widths (and REG_BINARY with
+//! matching width) are decoded here and every failure mode is counted.
 
 use rc_protocol::consts::{DEVICE_PID, DEVICE_VID};
 
@@ -29,8 +29,8 @@ pub struct HostEntry {
 }
 
 /// Full-scan result with diagnostic counters. Without these, "0 entries"
-/// cannot be attributed to anything — the reference project's misleading
-/// "device not connected" report is exactly that failure.
+/// cannot be attributed to anything — a bare "device not connected" report
+/// hides exactly that failure.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HostScan {
     pub entries: Vec<HostEntry>,

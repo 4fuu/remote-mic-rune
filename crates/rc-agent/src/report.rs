@@ -7,9 +7,9 @@
 //! The one gate that must never regress: a report is *touched* when ANY of
 //! the three views — report set (edge reporting), clear set (canary keys
 //! included), or the synthesis voice key — is present. Gating on the report
-//! view alone was the reference product's shipped bug: reports containing
-//! only a canary key (or only the voice key) early-exited and the canary
-//! feature was dead code from day one.
+//! view alone would silently disable the canary feature: reports containing
+//! only a canary key (or only the voice key) would early-exit and the
+//! canary would be dead code.
 
 use rc_protocol::agent_wire::AgentStats;
 use rc_protocol::consts::{MAX_CLEARS, RELEASE_HOLD_MS, REPORT_LEN, USAGE_SLOT_OFFSETS};
@@ -34,7 +34,7 @@ pub enum SynthFrame {
 pub struct PatchPlan {
     /// Full 9-byte report as it must be written to the output buffer.
     pub patched: [u8; REPORT_LEN],
-    /// True when a slot was rewritten to the synthesis usage (not just zeroed).
+    /// True when a slot was overwritten with the synthesis usage (not just zeroed).
     pub synth_changed: bool,
 }
 
@@ -210,8 +210,8 @@ pub struct FrameDecision {
     pub lease_expired: u64,
 }
 
-/// Decide what to do with one intercepted report. Ported step for step from
-/// the reference agent's onEnter ordering:
+/// Decide what to do with one intercepted report. The onEnter ordering is
+/// fixed:
 /// edges first, then the release hold, then the union gate, then the
 /// lease / mode / cap gates, then the press-frame gate delay, then patching.
 pub fn plan_frame(inp: &FrameInputs) -> FrameDecision {
@@ -386,7 +386,7 @@ mod tests {
         let v = view_report_set(&r, REPORT_SET);
         assert!(should_touch_report(!v.is_empty(), false, false));
 
-        // canary-only report: this exact case early-exited in the reference
+        // canary-only report: a report-view-only gate would early-exit here
         let r = report_with([0x004A, 0, 0]);
         let v = view_clear_set(&r, CLEAR_SET);
         assert!(!v.is_empty());

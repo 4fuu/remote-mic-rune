@@ -5,7 +5,7 @@
 //! `ntdll!NtDeviceIoControlFile` and connects a named-pipe transport to the
 //! elevated helper. Target IOCTL submissions (`0x80018483`) carry the 9-byte
 //! keyboard report; the pure decision layer in [`report`] decides which
-//! slots to scrub (captured buttons, canary keys) or rewrite (voice-key
+//! slots to scrub (captured buttons, canary keys) or overwrite (voice-key
 //! synthesis), the state machine in [`state`] enforces the lease and every
 //! command guardrail, and the hook layer applies the plan with
 //! patch -> verify -> call -> restore semantics.

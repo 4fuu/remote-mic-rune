@@ -6,7 +6,7 @@
 //! pressed sets (`E` lines), heartbeats (`P`), ownership acks (`O`), synth
 //! acks (`A`), recovery state (`R`) and goodbye (`BYE`).
 //!
-//! Safety model (ported from the reference product's semantics):
+//! Safety model:
 //! - **Absolute-state edges**: `E` lines carry the full pressed set; this
 //!   crate derives press/release transitions itself, so a lost line
 //!   self-heals on the next one.

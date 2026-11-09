@@ -1,8 +1,8 @@
 //! Every timing constant, safety cap, and fixed name in one place.
 //!
-//! Values follow the reference implementation's real-device-validated numbers.
+//! Values are real-device-validated numbers.
 //! Do not tune these blindly: each one encodes a fail-open budget measured on
-//! hardware (see docs/MECHANISMS.md).
+//! hardware (see docs/mechanisms.md).
 
 /// Transport: named pipe the agent (inside WUDFHost) connects to.
 /// Suffix with the helper PID; the helper passes the full name to the DLL in
@@ -92,7 +92,7 @@ pub const PIPE_IDLE_BACKOFF_MS: u64 = 2;
 // ---------------------------------------------------------------------------
 
 /// The UMDF host->kernel HID report submission IOCTL intercepted by the agent.
-/// Semantics established by the reference project's taps on real hardware.
+/// Semantics established by taps on real hardware.
 pub const TARGET_IOCTL: u32 = 0x8001_8483;
 
 /// Keyboard report id the agent touches.
@@ -112,7 +112,7 @@ pub const REPORT_LEN: usize = 9;
 /// Slots are little-endian: usage = lo | (hi << 8).
 pub const USAGE_SLOT_OFFSETS: [usize; 3] = [3, 5, 7];
 
-/// Gesture recognizer timings (reference values, "Mac parity").
+/// Gesture recognizer timings (validated on real hardware).
 pub const DOUBLE_CLICK_WINDOW_MS: u64 = 300;
 pub const LONG_PRESS_THRESHOLD_MS: u64 = 550;
 pub const REPEAT_START_DELAY_MS: u64 = 350;

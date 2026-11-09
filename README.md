@@ -1,11 +1,24 @@
-# remote-mic-rune
+# Remote Mic Rune
 
-Windows app for Xiaomi Bluetooth remotes (RC003): elevated report-layer key
-capture rewritten with a Rune UI. Mechanism-equivalent reimplementation of the
-enhanced ("全按键支持") track of the reference project
-[GetSayAll/remote-mic-app-windows](https://github.com/GetSayAll/remote-mic-app-windows)
-(original Rust code; the reference was read for mechanism facts only — see
-[docs/ADR-0001](docs/ADR-0001-rewrite-scope.md)).
+Windows app that turns the Xiaomi RC003 (2 Pro) Bluetooth remote into a fully
+programmable remote for your PC.
+
+The RC003 pairs as a BLE keyboard, but Windows silently drops three of its
+keys — Back, Volume+ and Volume− never reach any application — and the
+remaining buttons arrive as fixed key presses you cannot rebind. Remote Mic
+Rune captures keys at the HID report layer, below every user-mode input
+channel, and makes all 13 buttons programmable:
+
+- **13 semantic buttons** — Back, OK, TV, Home, Left/Right/Up/Down, Menu,
+  Power, Volume mute/+/−.
+- **Per-button gestures** — each button carries independent **single press,
+  double press and long press** bindings, plus hold-to-repeat.
+- **Actions** — keyboard shortcuts (full chords with modifiers), media keys
+  (volume, play/pause, previous/next), and mouse clicks.
+- **The three Windows-invisible keys made usable** — Back, Volume+ and
+  Volume− are dropped by the keyboard driver before any user-mode input
+  channel sees them; owning them requires the report layer, which is exactly
+  where this project works.
 
 ## How it works
 
@@ -13,8 +26,8 @@ enhanced ("全按键支持") track of the reference project
 RC003 (BLE HID) ──► WUDFHost.exe ──► kbdhid ──► Windows input
                         │  ▲
              (1) inject │  │ (2) hook NtDeviceIoControlFile:
-             rc_agent   │  │     zero mapped usages in keyboard
-             .dll       │  │     report 0x01 before the kernel copies it
+             rc_agent   │  │    clear mapped usages in keyboard
+             .dll       │  │    report 0x01 before the kernel copies it
                         ▼  │
                   rc-helper.exe (elevated, scheduled task)
                         │  ▲ lease renew 500 ms / lease 2 s (fail-open)
@@ -22,40 +35,81 @@ RC003 (BLE HID) ──► WUDFHost.exe ──► kbdhid ──► Windows input
                         ▼  │
                    rc-app.exe (Rune UI)
                         │
-                   rc-bridge (pipe server, token, per-generation
+                   rc-bridge (pipe server, token auth, per-generation
                               key ownership, watchdogs)
                         │
-                   rc-mapping (click/double/hold gestures → SendInput)
+                   rc-mapping (single/double/long gestures → SendInput)
 ```
 
-- The remote's Back / Vol+ / Vol− usages are dropped by `kbdhid` before any
-  user-mode input channel; owning them requires the report layer.
-- **Fail-open everywhere**: if the helper dies, stops renewing the lease, or
-  the app disconnects, the agent stops modifying reports within ≤2 s and the
-  remote behaves like a plain keyboard again.
+A scheduled task runs the elevated helper with a single UAC prompt. The
+helper locates the `WUDFHost.exe` process that hosts the RC003's BLE HID
+device, injects `rc_agent.dll` into it, and renews a 2-second lease. The
+agent hooks the host→kernel HID report submission at the
+`NtDeviceIoControlFile` boundary and selectively clears chosen usages from
+keyboard report 0x01 before the kernel copies it — the only place where
+Back/Volume+/Volume− still exist. Kept keys flow over a named-pipe bridge to
+the app, where the gesture engine turns press/release edges into
+single/double/long gestures and replays them as real system input with
+`SendInput`.
+
+**Fail-open by design.** The agent only modifies reports while the lease is
+alive. If the helper dies, is force-killed, stops renewing, or the app goes
+away, the agent stops touching reports within 2 seconds and the remote
+behaves like a plain keyboard again — no stuck keys, nothing left armed.
 
 ## Workspace
 
 | Crate | Kind | Role |
 | ----- | ---- | ---- |
-| `crates/rc-protocol` | lib | Single source of truth: usage table, wire formats, timing/safety constants. No Windows APIs. |
+| `crates/rc-protocol` | lib | Single source of truth: button usage table, wire formats, timing/safety constants. No Windows APIs. |
 | `crates/rc-agent` | cdylib | Injected into WUDFHost: IOCTL hook, selective usage clearing, lease, voice-key synthesis. |
-| `crates/rc-helper` | bin | Elevated helper: locate exclusive host, inject, renew lease, bridge agent↔app, scheduled task, device-node recovery. |
-| `crates/rc-bridge` | lib | App-side link endpoint: pipe server, token auth, generation ownership, watchdogs. |
-| `crates/rc-mapping` | lib | Gesture recognizer (click/double/hold/repeat) + action mapping + SendInput. |
-| `crates/rc-app` | bin | Rune UI shell. |
+| `crates/rc-helper` | bin | Elevated helper: locate the exclusive host, inject, renew the lease, bridge agent↔app, scheduled task, device-node recovery. |
+| `crates/rc-bridge` | lib | App-side link endpoint: pipe server, token auth, per-generation key ownership, watchdogs. |
+| `crates/rc-mapping` | lib | Gesture recognizer (single/double/long/repeat) + action model + SendInput injection. |
+| `crates/rc-app` | bin | Rune UI shell: status, capture control, mapping canvas, helper task, settings. |
 
-Docs: [ADR-0001 scope & mechanism parity](docs/ADR-0001-rewrite-scope.md) ·
-[Real-device test guide 真机测试指南](docs/REALDEVICE-TEST.md)
+## Quick start
 
-## Build
+1. **Build** (Linux cross-build or native Windows — see
+   [docs/building.md](docs/building.md)):
 
-```bash
-cargo test                                   # host-runnable logic (all crates)
-cargo check --target x86_64-pc-windows-msvc  # fast Windows type check
-cargo build --release --target x86_64-pc-windows-gnu   # cross-build (mingw)
-```
+   ```bash
+   cargo test                                   # host-runnable logic (all crates)
+   cargo build --release --target x86_64-pc-windows-gnu   # mingw cross-build
+   ```
 
-`rc_agent.dll` must sit next to `rc-helper.exe` at runtime.
+   `rc_agent.dll` must sit next to `rc-helper.exe` at runtime.
 
-License: MIT.
+2. **Install the helper task** — in the app: *Helper → Install helper task
+   (UAC once)*, or on an elevated prompt: `rc-helper --install-task`. One UAC
+   prompt; afterwards the helper starts and stops without prompts.
+
+3. **Enable capture** — start the helper (*Helper → Start helper*), map
+   buttons in the *Buttons* tab, then flip *Capture → Enhanced capture*.
+   Back/Volume+/Volume− answer immediately; other buttons answer as soon as
+   they have bindings.
+
+Bringing the whole chain up on real hardware for the first time? Follow
+[docs/real-device-testing.md](docs/real-device-testing.md), which verifies
+each stage separately before the full UI chain.
+
+## Docs
+
+- [docs/architecture.md](docs/architecture.md) — system overview: from BLE
+  HID reports to injected input, process boundaries, the two named pipes,
+  workspace layout.
+- [docs/mechanisms.md](docs/mechanisms.md) — the design catalogue:
+  report-layer capture, lease fail-open, key ownership, safety gates,
+  voice-key synthesis, gesture timings, scheduled task, device recovery,
+  token auth.
+- [docs/ui.md](docs/ui.md) — the app window: inset-grouped form and the
+  spatial mapping canvas.
+- [docs/building.md](docs/building.md) — build, test, cross-compile,
+  deployment layout.
+- [docs/real-device-testing.md](docs/real-device-testing.md) — staged
+  bring-up on real hardware, canary verification, troubleshooting, fail-open
+  self-check.
+
+## License
+
+Original codebase, MIT. The UI is built on Rune (MIT).

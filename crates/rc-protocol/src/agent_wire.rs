@@ -132,7 +132,7 @@ pub enum AgentToHelper {
     /// Rate-limited diagnostics line (already truncated by the agent).
     Log { t: u64, msg: String },
     /// One synthesized voice frame result: replaced=true means the report
-    /// really was rewritten this press.
+    /// really was overwritten this press.
     VoiceFrame { t: u64, replaced: bool, reason: String },
     Bye { t: u64 },
 }

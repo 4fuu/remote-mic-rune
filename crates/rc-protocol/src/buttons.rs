@@ -2,9 +2,9 @@
 //! keyboard collection, VID 0x2717 / PID 0x32B8).
 //!
 //! The voice key (usage 0x003E) is intentionally NOT part of the button
-//! mapping system: in the reference product it belongs to the ATVV voice
-//! session, and in this rewrite it is only ever used for report-layer
-//! synthesis (see [`VOICE_KEY_HID_USAGE`]).
+//! mapping system: it is the remote's ATVV voice-session key, and here it
+//! is only ever used for report-layer synthesis (see
+//! [`VOICE_KEY_HID_USAGE`]).
 
 use serde::{Deserialize, Serialize};
 
@@ -65,7 +65,7 @@ pub const ENHANCED_CAPTURE_BUTTON_USAGES: [(RemoteButton, u16); 13] = [
 /// layer may synthesize it into a keyboard usage (whitelist below).
 pub const VOICE_KEY_HID_USAGE: u16 = 0x003E;
 
-/// Synthesis targets validated on real hardware by the reference project:
+/// Synthesis targets validated on real hardware:
 /// 0x00E6 -> VK_RMENU (right alt), 0x00E2 -> VK_LMENU (left alt).
 /// Any other target usage must be rejected (per-key verification required
 /// before extending this list).

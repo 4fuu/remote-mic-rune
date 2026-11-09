@@ -1,6 +1,6 @@
 //! Clock helpers shared by the pure state machine and the Windows glue.
 //!
-//! Two time bases are used, mirroring the reference agent:
+//! Two time bases are used:
 //! - monotonic milliseconds since process start for every internal timing
 //!   decision (lease, watchdogs, backoff) — immune to wall-clock changes;
 //! - UNIX milliseconds for wire message `t` fields.

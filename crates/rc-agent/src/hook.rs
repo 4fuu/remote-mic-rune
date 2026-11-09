@@ -21,7 +21,7 @@
 //!
 //! The detour wraps everything in catch_unwind; on any error the original
 //! function is still called untouched. Writes follow patch -> verify ->
-//! call -> restore with the reference agent's semantics.
+//! call -> restore.
 
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicPtr, AtomicU64, AtomicU8, Ordering};
@@ -76,7 +76,7 @@ static TRAMPOLINE: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 /// compare-exchange so two racing boot calls can never double-hook.
 static HOOK_PHASE: AtomicU8 = AtomicU8::new(0);
 
-/// Raw count of every NtDeviceIoControlFile call (reference `ioctl_calls`).
+/// Raw count of every NtDeviceIoControlFile call.
 /// Kept lock-free because it is bumped on the syscall path; folded into the
 /// reported stats by the heartbeat.
 pub static HW_IOCTL_CALLS: AtomicU64 = AtomicU64::new(0);
@@ -198,7 +198,7 @@ unsafe fn write_abs_jump(at: *mut c_void, to: *mut c_void) {
 unsafe fn suspend_other_threads() -> Vec<HANDLE> {
     let mut suspended: Vec<HANDLE> = Vec::new();
     let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) else {
-        return suspended; // no snapshot: patch anyway, as the reference did
+        return suspended; // no snapshot: patch anyway (fail-open)
     };
     let my_pid = GetCurrentProcessId();
     let my_tid = GetCurrentThreadId();
@@ -375,7 +375,7 @@ unsafe fn process_hit(
         transport::enqueue_agent(m);
     }
 
-    // Synthesis traces for gated-away frames (reference synthTrace points).
+    // Synthesis traces for gated-away frames (rate-limited trace points).
     if matches!(decision.synth_frame, SynthFrame::Press | SynthFrame::Held) {
         if let Some(reason) = decision.synth_skip_reason {
             logging::synth_trace(&format!("skip reason={reason}"));
@@ -384,7 +384,7 @@ unsafe fn process_hit(
 
     // ---- Release hold: keep the synthesized key down a little longer so
     // the app can drain trailing audio. Runs on the caller's thread, by
-    // design, exactly like the reference.
+    // design.
     if decision.release_hold_ms > 0 {
         Sleep(decision.release_hold_ms);
         logging::synth_trace(&format!("release hold_ms={}", decision.release_hold_ms));

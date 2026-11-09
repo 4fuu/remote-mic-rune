@@ -2,7 +2,7 @@
 //! absolute-state edges, and heartbeat rendering. Platform-independent; the
 //! transport feeds it lines and ships back the produced messages.
 //!
-//! Guardrails are ported from the reference agent verbatim in spirit:
+//! Guardrails enforced end to end:
 //! report ⊆ semantic button whitelist, clear ⊇ report, usage 0 rejected,
 //! duplicates rejected, token checked on every command before dispatch (a
 //! forged renew must never arm the agent), synth targets whitelist-checked,
@@ -18,7 +18,7 @@ use rc_protocol::consts::{
     AGENT_AUTH_TIMEOUT_MS, AGENT_RECONNECT_MS, AGENT_RX_TIMEOUT_MS, GATE_DELAY_MS,
 };
 
-/// Progressive post-auth-failure reconnect backoff (reference values).
+/// Progressive post-auth-failure reconnect backoff.
 /// Not a tunable protocol constant: re-arming too fast only floods the peer
 /// that rejected us.
 pub const AUTH_BACKOFF_STEPS_MS: [u64; 4] = [2_000, 4_000, 8_000, 15_000];
@@ -52,7 +52,7 @@ pub struct AgentCore {
     pub synth_from: u16,
     pub synth_to: u16,
     /// The OS still believes the synthesized key is down (last frame was
-    /// really rewritten); the next frame without the voice key is a release.
+    /// really overwritten); the next frame without the voice key is a release.
     pub synth_held: bool,
     /// Press-frame presentation delay; 0 = gate disabled.
     pub gate_delay_ms: u32,
@@ -133,7 +133,7 @@ impl AgentCore {
         self.t_last_rx_ms = Some(now_ms);
     }
 
-    /// Watchdogs, in the reference's order: auth first ("the peer does not
+    /// Watchdogs, in a fixed order: auth first ("the peer does not
     /// recognize us"), then rx silence ("the peer is gone").
     pub fn watchdog_hit(&self, now_ms: u64) -> Option<(&'static str, bool)> {
         if self.connected {
@@ -183,7 +183,7 @@ impl AgentCore {
     }
 
     /// Absolute-state edge on change. `found` must be sorted. Only state
-    /// changes count toward `edges_sent` (reference semantics).
+    /// changes count toward `edges_sent`.
     pub fn emit_edges_if_changed(&mut self, found: &[u16], unix_ms: u64) -> Option<AgentToHelper> {
         if Self::same_sorted_set(&self.pressed, found) {
             return None;
@@ -932,9 +932,10 @@ mod tests {
 
     #[test]
     fn lease_silence_is_not_misjudged_as_auth_failure() {
-        // The reference bug: using lastRenewAt == 0 to mean "never renewed"
-        // made a long-lived connection's ordinary stall look like an auth
-        // failure. ever_renewed must gate the auth watchdog instead.
+        // The subtle bug this test pins: using lastRenewAt == 0 to mean
+        // "never renewed" made a long-lived connection's ordinary stall look
+        // like an auth failure. ever_renewed must gate the auth watchdog
+        // instead.
         let mut c = core();
         c.on_connected(0);
         c.handle_line(&encode_helper_line(&HelperToAgent::Renew { token: TOKEN.into() }), 100, 0);

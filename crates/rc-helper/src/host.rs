@@ -1,6 +1,6 @@
 //! Host selection: turn a registry scan into an injection target verdict.
 //!
-//! Exclusive-host criterion (mechanism fact from the reference product):
+//! Exclusive-host criterion:
 //! a pid hosts exactly one WUDF-diagnostic member node AND that node is the
 //! RC003 (`members == 1 && rc003_members == 1`). Shared hosts are refused by
 //! default because killing or injecting them takes down the user's other BLE

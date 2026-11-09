@@ -1,8 +1,7 @@
 //! Gesture recognition: single / double / long press / hold-to-repeat from
 //! raw press and release edges, one independent state machine per button.
 //!
-//! Ported from the reference product's recognizer (mechanism facts only;
-//! original implementation). Timings follow `rc_protocol::consts`:
+//! Timings follow `rc_protocol::consts`:
 //! double window 300 ms between press onsets, long press at 550 ms held,
 //! repeat start delay 350 ms, per-button repeat interval from
 //! [`RemoteButton::repeat_interval`].
@@ -380,7 +379,7 @@ impl GestureRecognizer {
 
     /// Context click swallows this press: pending state is cleared and the
     /// following release finishes silently. Currently unused by the engine;
-    /// kept for API parity with the reference recognizer.
+    /// kept for API completeness.
     pub fn swallow_press(&mut self, button: RemoteButton) {
         if let Some((_, state)) = self.buttons.get_mut(&button) {
             *state = ButtonGestureState {

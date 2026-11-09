@@ -6,15 +6,16 @@
 //!   ships back produced messages. Idle reads poll with `PeekNamedPipe` and
 //!   the shared 2 ms idle backoff, so the rx watchdog stays meaningful.
 //! - writer: the ONLY writer, fed by the outbound queue (single serialized
-//!   writer — the reference lost whole message classes to concurrent writes).
+//!   writer — interleaved concurrent writers can silently lose whole
+//!   message classes).
 //!   Writes are overlapped with a timeout plus `CancelIoEx`, so a stuck peer
 //!   can never wedge this thread.
 //! - heartbeat: watchdogs (auth before rx), lease-expiry release, retired
 //!   handle reaping, and the periodic stats heartbeat.
 //!
 //! Disconnect detection does NOT rely on read/write errors (unreliable on
-//! pipes); the watchdogs use "no downlink bytes" and "no renew ever" exactly
-//! like the reference.
+//! pipes); the watchdogs use "no downlink bytes" and "no renew ever" as the
+//! sole liveness signals.
 
 use std::collections::VecDeque;
 use std::sync::{Condvar, Mutex};
@@ -40,7 +41,7 @@ use crate::runtime::{lock_ok, RawHandle, Runtime, RUNTIME};
 
 /// Win32 GENERIC_READ | GENERIC_WRITE for the duplex pipe handle.
 const GENERIC_READ_WRITE: u32 = 0x8000_0000 | 0x4000_0000;
-/// Outbound backlog cap (reference TX_QUEUE_MAX): after this many queued
+/// Outbound backlog cap: after this many queued
 /// lines the newest is dropped and counted rather than growing unbounded.
 const TX_QUEUE_CAP: usize = 512;
 /// A single serialized write may take at most this long before it is
