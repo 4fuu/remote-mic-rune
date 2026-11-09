@@ -74,10 +74,12 @@ How to read the results:
   report-layer read path works.
 - Canary key dead while running and recovered after exit → the clear
   write-back and the lease mechanism are both correct.
-- A `unsupported_prologue:xxxx` line → the ntdll prologue bytes are not in
-  the validated pattern table (expected fail-open behavior: no hook, native
-  behavior). Record the hex bytes and extend the pattern table in
-  `rc-agent::hook`.
+- A `hook:failed unsupported_toolchain` line → the agent was built with a
+  toolchain the Frida Gum devkit does not support (expected fail-open
+  behavior: no hook, native behavior). Rebuild with the MSVC toolchain.
+- Any other `hook:failed <reason>` line → the hook installation was
+  refused (missing ntdll export, Gum attach error). Capture stays off and
+  the remote stays native; record the reason.
 
 ## 3. Full chain with the UI
 
@@ -122,19 +124,30 @@ Mechanism-level acceptance list:
 - [ ] The clear cap exists (`MAX_CLEARS` in `rc_protocol::consts`; a code
       constant, not expected to trigger in the field).
 
-## 6. Known blocker on Windows 11 26100 (2026-11-09 field test)
+## 6. Win11 26100 blocker (2026-11-09 field test) and the Frida rewrite
 
-The hand-written inline hook on the shared `ntdll!NtDeviceIoControlFile`
-syscall stub is currently **not viable**: with the hook installed, any
-non-target ioctl that completes through a kernel user callback (observed
-with console-driver ioctls, `0x00500016`; the agent's own pipe polling is
-on the same path) faults forever in `KiUserCallbackDispatcher` - processes
-without user32 (WUDFHost included) have a NULL `KernelCallbackTable`. Three
-trampoline designs (direct Rust detour, Detours-style asm relay with a
-pristine pass-through, and a self-contained `syscall; ret` trampoline) all
-reproduce the identical crash, while the un-hooked build passes the whole
-observe chain. Fix candidates under consideration: switching the hook layer
-to frida-gum (the approach proven by the reference ecosystem). Everything
-else verified in the 2026-11-09 field test: BLE device discovery,
-SeDebugPrivilege, DLL deployment location, module verification, and the
-pipe writer fix documented in this guide.
+The original hand-written inline hook on the shared
+`ntdll!NtDeviceIoControlFile` syscall stub was **not viable**: with the hook
+installed, any non-target ioctl that completes through a kernel user
+callback (observed with console-driver ioctls, `0x00500016`; the agent's own
+pipe polling is on the same path) faults forever in
+`KiUserCallbackDispatcher` - processes without user32 (WUDFHost included)
+have a NULL `KernelCallbackTable`. Three trampoline designs (direct Rust
+detour, Detours-style asm relay with a pristine pass-through, and a
+self-contained `syscall; ret` trampoline) all reproduce the identical
+crash, while the un-hooked build passes the whole observe chain.
+
+**Resolved in code:** the hand-written trampoline (prologue pattern table,
+trampoline allocation, thread suspension) has been removed and replaced with
+Frida Gum's `Interceptor` (`frida-gum` crate 0.17.2, MSVC builds only).
+This is the same hook shape proven in the same WUDFHost by the reference
+ecosystem's JS agent (`rc003_agent.js`, `installHook()`): Gum relocates the
+prologue with full instruction awareness instead of fixed 16-byte
+assumptions, and invokes the original function through its own trampoline.
+
+**Not yet validated on a device.** The next field test must re-run the full
+observe chain first (section 2), then the full chain with the UI (section
+3) — the hook layer is new code even though the decision path is unchanged.
+Everything else verified in the 2026-11-09 field test still applies: BLE
+device discovery, SeDebugPrivilege, DLL deployment location, module
+verification, and the pipe writer fix documented in this guide.

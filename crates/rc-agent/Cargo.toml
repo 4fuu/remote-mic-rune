@@ -18,12 +18,16 @@ serde_json = { workspace = true }
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_System_Threading",
-    "Win32_System_Memory",
     "Win32_System_LibraryLoader",
-    "Win32_System_Diagnostics_ToolHelp",
-    "Win32_System_Diagnostics_Debug",
     "Win32_System_IO",
     "Win32_System_Pipes",
     "Win32_Storage_FileSystem",
     "Win32_Security",
 ] }
+
+# Frida Gum: the Interceptor hook on ntdll!NtDeviceIoControlFile. The devkit
+# ships as an MSVC static library, so the hook layer is only built with the
+# MSVC toolchain (the production toolchain); see crates/rc-agent/src/hook.rs
+# for the fail-open stub other Windows toolchains compile instead.
+[target.'cfg(all(target_os = "windows", target_env = "msvc"))'.dependencies]
+frida-gum = { version = "=0.17.2", features = ["auto-download", "invocation-listener"] }
