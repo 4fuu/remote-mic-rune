@@ -144,13 +144,20 @@ mod imp {
         // lifetime; Gum stores the raw pointer. It carries no state, so
         // sharing it across threads is safe.
         let listener: &'static mut NtListener = Box::leak(Box::new(NtListener));
+        // Gum's interceptor is a weak-backed global singleton: `obtain`
+        // returns the one strong reference this process holds, and when
+        // that reference is dropped Gum disposes the interceptor and
+        // removes every attached function context, uninstalling the hook.
+        // Nothing may drop it while the hook is installed, so forget both
+        // the interceptor and the attach handle (a `static` will not do:
+        // `Interceptor` is not `Sync`). On the attach-error path above,
+        // dropping is harmless: nothing was attached yet.
         let mut interceptor = Interceptor::obtain(gum);
-        // Keep the returned handle alive forever: dropping it would unref
-        // the underlying listener object while the hook stays installed.
         let handle = interceptor
             .attach(target, listener)
             .map_err(|e| format!("hook:attach:{e}"))?;
         std::mem::forget(handle);
+        std::mem::forget(interceptor);
         Ok(())
     }
 
