@@ -172,6 +172,7 @@ mod tests {
         assert!(line.contains("Denies 0"));
         let zh = counters_line(Lang::Zh, &c);
         assert!(zh.contains("边沿 12"));
+        assert!(zh.contains("心跳 3"));
         assert!(zh.contains("拒绝 0"));
     }
 }

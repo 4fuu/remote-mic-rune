@@ -194,7 +194,7 @@ static ZH_TABLE: &[(&str, &str)] = &[
     ("Disabled", "禁用"),
     ("Double", "双击"),
     ("Down", "下"),
-    ("Edges {} · ReleaseAll {} · Retargets {} · Pings {} · Denies {}", "边沿 {} · 全部释放 {} · 目标更新 {} · Ping {} · 拒绝 {}"),
+    ("Edges {} · ReleaseAll {} · Retargets {} · Pings {} · Denies {}", "边沿 {} · 全部释放 {} · 目标更新 {} · 心跳 {} · 拒绝 {}"),
     ("English", "English"),
     ("Enhanced capture", "增强捕获"),
     ("Enhanced capture off", "增强捕获已关闭"),
