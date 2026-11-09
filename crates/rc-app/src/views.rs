@@ -94,6 +94,7 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
         row()
             .key("tabs-row")
             .w_full()
+            .justify_center()
             .px(space::S6)
             .pb(space::S3)
             .child(
