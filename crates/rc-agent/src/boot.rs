@@ -97,8 +97,9 @@ pub extern "system" fn rc_agent_boot(cfg: *const AgentBootConfig) -> u32 {
 
     // Hook first: with no targets configured and no lease it is fail-open by
     // construction, and installing before the transport means every report
-    // is seen from the first moment. A refused hook (unknown prologue) is
-    // logged and the agent continues without capture.
+    // is seen from the first moment. A refused hook (for example an attach
+    // error, or the unsupported-toolchain stub) is logged and the agent
+    // continues without capture.
     match crate::hook::install() {
         Ok(()) => logging::file_log("hook:installed"),
         Err(e) => logging::file_log(&format!("hook:failed {e}")),

@@ -136,8 +136,8 @@ Every component assumes every other component can vanish:
 - Key ownership is tracked per generation with a 1.5 s ack timeout — it
   expires *before* the agent's 2 s lease so the native keyboard path always
   recovers first.
-- Any panic or unexpected prologue inside the agent unwinds into calling the
-  original function untouched; reports are patched only after an 8-point
-  safety gate passes.
+- Any panic inside the agent unwinds into calling the original function
+  untouched, and a failed hook installation leaves the process unhooked;
+  reports are patched only after an 8-point safety gate passes.
 
 See [mechanisms.md](mechanisms.md) for each of these in detail.

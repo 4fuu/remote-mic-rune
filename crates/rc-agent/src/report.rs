@@ -316,6 +316,42 @@ pub fn apply_restore_outcome(stats: &mut AgentStats, restored: bool) {
     }
 }
 
+/// What the leave callback must do with a finished invocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeaveAction {
+    /// Leave the buffer alone, count nothing.
+    Nothing,
+    /// The kernel rewrote the buffer during the call: skip the restore,
+    /// count `kernel_changed`.
+    KernelChanged,
+    /// The buffer still holds exactly our patched bytes: write the original
+    /// content back, count `restores_ok`.
+    Restore,
+}
+
+/// The post-call restore decision. A patch that never landed (readback
+/// mismatch) or restore disabled means no bookkeeping at all; a verified
+/// patch is restored only while the buffer still contains exactly the bytes
+/// we wrote — the kernel may legitimately have moved underneath us. The
+/// comparison is against the patched content, never the original report:
+/// every plan changes at least one byte, so comparing the wrong side would
+/// restore over a kernel-modified buffer.
+pub fn restore_decision(
+    patch_verified: bool,
+    restore_enabled: bool,
+    current: &[u8; REPORT_LEN],
+    patched: &[u8; REPORT_LEN],
+) -> LeaveAction {
+    if !patch_verified || !restore_enabled {
+        return LeaveAction::Nothing;
+    }
+    if current == patched {
+        LeaveAction::Restore
+    } else {
+        LeaveAction::KernelChanged
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -581,5 +617,44 @@ mod tests {
         apply_restore_outcome(&mut stats, false);
         assert_eq!(stats.restores_ok, 1);
         assert_eq!(stats.kernel_changed, 1);
+    }
+
+    #[test]
+    fn restore_never_touches_an_unverified_or_disabled_hit() {
+        let r = report_with([SYNTH_FROM, 0, 0]);
+        let p = patch_report(&r, &[], SYNTH_FROM, SYNTH_TO).expect("patch expected");
+        // readback failed after the write: nothing may be counted or written
+        assert_eq!(
+            restore_decision(false, true, &p.patched, &p.patched),
+            LeaveAction::Nothing
+        );
+        // restore switched off after the patch landed: leave the buffer alone
+        assert_eq!(
+            restore_decision(true, false, &p.patched, &p.patched),
+            LeaveAction::Nothing
+        );
+    }
+
+    #[test]
+    fn restore_writes_original_back_only_over_our_own_patched_bytes() {
+        let r = report_with([SYNTH_FROM, 0x004A, 0]);
+        let p = patch_report(&r, CLEAR_SET, SYNTH_FROM, SYNTH_TO).expect("patch expected");
+        // asymmetric setup: the patch always differs from the original
+        assert_ne!(p.patched, r);
+        // buffer still exactly ours: restore the original 9 bytes
+        assert_eq!(
+            restore_decision(true, true, &p.patched, &p.patched),
+            LeaveAction::Restore
+        );
+        // kernel touched byte 1 (OS-owned) during the call: give up and
+        // count kernel_changed — comparing against the ORIGINAL report
+        // would wrongly restore here
+        let mut kernel_touched = p.patched;
+        kernel_touched[1] = 0x20;
+        assert_ne!(kernel_touched, r);
+        assert_eq!(
+            restore_decision(true, true, &kernel_touched, &p.patched),
+            LeaveAction::KernelChanged
+        );
     }
 }

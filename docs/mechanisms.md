@@ -36,11 +36,20 @@ keys (from the app's target set) and optional canary keys are cleared here;
 the report layer is also the only place the voice key can be intercepted and
 re-synthesized.
 
-The hook itself is a hand-rolled validated-pattern inline trampoline on
-`ntdll!NtDeviceIoControlFile`. The prologue pattern table is validated
-against Win10/Win11 x64 syscall stubs; an unrecognized prologue means no
-hook is installed at all and the process log gets an `unsupported_prologue`
-line — capture stays off, the remote stays native.
+The hook itself is Frida Gum's `Interceptor` attached to
+`ntdll!NtDeviceIoControlFile`. Gum relocates the function prologue with full
+instruction awareness, which removes the hand-written validated-pattern
+trampoline previously used here (its fixed 16-byte prologue assumptions
+crashed in `KiUserCallbackDispatcher` on Win11 26100). The enter callback
+keeps the target filter (IOCTL `0x80018483`, input length 8, `in[4]`/`in[5]`
+== `0x02`/`0x01`, output length >= 9, report id `0x01`), runs the decision
+path, and patches the output buffer; the leave callback restores the
+original bytes. Installation failures — missing ntdll export, a Gum attach
+error, or a toolchain without the Frida devkit — all mean no hook is
+installed and the process log gets a `hook:failed <reason>` line — capture
+stays off, the remote stays native. The hook layer is only built with the
+MSVC toolchain; other toolchains compile a fail-open stub that logs
+`hook:unsupported_toolchain` (see [building.md](building.md)).
 
 ## Lease fail-open
 
@@ -118,8 +127,9 @@ failed clear), and the post-call restore refuses to stomp on a
 kernel-modified buffer.
 
 The whole detour runs inside `catch_unwind`: on any panic the original
-function is still called untouched, and an unrecognized ntdll prologue
-means the hook is never installed.
+function is still called untouched, and a failed hook installation (missing
+export, Gum attach error, unsupported toolchain) means the hook is never
+installed.
 
 ## Voice-key synthesis
 

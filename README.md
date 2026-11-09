@@ -78,7 +78,10 @@ behaves like a plain keyboard again — no stuck keys, nothing left armed.
    cargo build --release --target x86_64-pc-windows-gnu   # mingw cross-build
    ```
 
-   `rc_agent.dll` must sit next to `rc-helper.exe` at runtime.
+   `rc_agent.dll` must sit next to `rc-helper.exe` at runtime. The mingw
+   cross-build produces all artifacts but **without enhanced capture** — the
+   Frida Gum hook layer only compiles with the MSVC toolchain (production).
+   See [docs/building.md](docs/building.md).
 
 2. **Install the helper task** — in the app: *Helper → Install helper task
    (UAC once)*, or on an elevated prompt: `rc-helper --install-task`. One UAC
@@ -119,4 +122,10 @@ Original codebase, MIT. The UI is built on Rune (MIT).
 - [remote-mic-app-windows](https://github.com/GetSayAll/remote-mic-app-windows)
   (无线麦 SayAll for Windows) — the idea of turning the Xiaomi Bluetooth
   remotes into a Windows controller, including device bring-up and per-button
-  key mapping, was inspired by this project.
+  key mapping, was inspired by this project. Its JS agent's
+  `NtDeviceIoControlFile` hook (`rc003_agent.js`, `installHook()`) is the
+  proven reference shape our Frida Gum hook follows.
+- [Frida](https://frida.re) / [frida-gum](https://github.com/frida/frida-gum)
+  — the `Interceptor` engine behind the agent's report-layer hook (crate
+  `frida-gum` 0.17.2, wxWindows licence). See
+  [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
