@@ -20,9 +20,10 @@ use rc_protocol::{ALL_BUTTONS, RemoteButton};
 use rc_protocol::buttons::ALWAYS_CAPTURED_BUTTONS;
 
 use crate::bridge_api::{BridgePhase, BridgeStatus};
+use crate::i18n::{tr, tr_fmt, Lang, Language};
 use crate::mappings::{ButtonAction, MediaKey, MouseButton, Slot};
 use crate::task::TaskStatus;
-use crate::ui::{AppState, HelperCommand, PICKER_OPTIONS, Section, slot_key};
+use crate::ui::{picker_options, slot_key, AppState, HelperCommand, Section};
 
 // -- SwiftUI-flavoured type scale -------------------------------------------
 
@@ -105,7 +106,7 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
                 .color(k.c.text_faint),
         )
         .child(el().grow(1.0))
-        .child(badge_for_phase(&s.bridge, &k));
+        .child(badge_for_phase(&s.bridge, &k, s.lang));
 
     let mut window = col().key("window").w_full().h_full().fill(k.c.page);
     window = window.child(titlebar);
@@ -124,7 +125,7 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
             .px(space::S6)
             .pb(space::S3)
             .child(
-                SegmentedControl::new(&Section::LABELS, Some(s.section.index()))
+                SegmentedControl::new(&Section::labels(s.lang), Some(s.section.index()))
                     .label("Section")
                     .fit()
                     .on_pick(|s: &mut AppState, index, _: &mut Tx| s.section = Section::from_index(index))
@@ -144,18 +145,18 @@ pub fn view(s: &AppState, cx: &mut Cx<AppState>) -> El {
     window = window.child(bottom_bar(s, &k));
 
     if let Some(error) = &s.launch_error {
-        layer.push(error_overlay(error, &k));
+        layer.push(error_overlay(error, &k, s.lang));
     }
     root(window, layer)
 }
 
 // -- shared pieces -----------------------------------------------------------
 
-fn badge_for_phase(status: &BridgeStatus, k: &Kit) -> El {
+fn badge_for_phase(status: &BridgeStatus, k: &Kit, lang: Lang) -> El {
     let (label, variant) = match status.phase {
-        BridgePhase::Stopped => ("Bridge stopped", BadgeVariant::Neutral),
-        BridgePhase::Listening => ("Listening for helper", BadgeVariant::Neutral),
-        BridgePhase::Connected => ("Connected", BadgeVariant::Accent),
+        BridgePhase::Stopped => (tr(lang, "Bridge stopped"), BadgeVariant::Neutral),
+        BridgePhase::Listening => (tr(lang, "Listening for helper"), BadgeVariant::Neutral),
+        BridgePhase::Connected => (tr(lang, "Connected"), BadgeVariant::Accent),
     };
     Badge::new(label).variant(variant).build(k).key("phase-badge")
 }
@@ -176,7 +177,7 @@ fn callout(message: &str, _k: &Kit, bg: rune::Color, fg: rune::Color) -> El {
         .child(text(message.to_string()).wrap().grow(1.0).font(FOOTNOTE).color(fg))
 }
 
-fn error_overlay(message: &str, k: &Kit) -> El {
+fn error_overlay(message: &str, k: &Kit, lang: Lang) -> El {
     col()
         .key("error-overlay")
         .absolute(0.0, 0.0)
@@ -194,14 +195,14 @@ fn error_overlay(message: &str, k: &Kit) -> El {
                 .fill(k.c.bg_base)
                 .border(1.0, k.c.border_muted)
                 .child(
-                    text("Cannot start")
+                    text(tr(lang, "Cannot start"))
                         .key("error-title")
                         .font(ERROR_TITLE)
                         .color(k.c.text_base),
                 )
                 .child(text(message.to_string()).wrap().font(HEADLINE).color(k.c.text_muted))
                 .child(
-                    Button::new("Exit")
+                    Button::new(tr(lang, "Exit"))
                         .variant(ButtonVariant::Submit)
                         .on_press_tx(|_: &mut AppState, tx: &mut Tx| tx.quit())
                         .build(k)
@@ -325,7 +326,7 @@ fn phase_value(s: &AppState, k: &Kit) -> El {
         .gap(space::S2)
         .child(dot(color))
         .child(
-            text(crate::status::phase_label(s.bridge.phase).to_string())
+            text(crate::status::phase_label(s.lang, s.bridge.phase))
                 .font(type_::BODY)
                 .color(k.c.text_muted),
         )
@@ -336,35 +337,64 @@ fn status_section(s: &AppState, k: &Kit) -> El {
         "status-link",
         k,
         vec![
-            form_row("kv-phase", k, "Bridge phase", phase_value(s, k)),
-            kv_row("pid", k, "Helper pid", s
-                .bridge
-                .helper_pid
-                .map(|p| p.to_string())
-                .unwrap_or_else(|| "none".to_string())),
-            kv_row("ownership", k, "Ownership", crate::status::ownership_line(&s.bridge)),
-            kv_row("acked", k, "Agent acked", crate::status::acked_buttons_line(&s.bridge.acked_usages)),
+            form_row("kv-phase", k, s.tr("Bridge phase"), phase_value(s, k)),
+            kv_row(
+                "pid",
+                k,
+                s.tr("Helper pid"),
+                s.bridge
+                    .helper_pid
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| s.tr("none").to_string()),
+            ),
+            kv_row(
+                "ownership",
+                k,
+                s.tr("Ownership"),
+                crate::status::ownership_line(s.lang, &s.bridge),
+            ),
+            kv_row(
+                "acked",
+                k,
+                s.tr("Agent acked"),
+                crate::status::acked_buttons_line(s.lang, &s.bridge.acked_usages),
+            ),
         ],
     );
     let capture = group(
         "status-capture",
         k,
         vec![
-            kv_row("capture", k, "Capture set", crate::status::acked_buttons_line(&s.bridge.captured_usages)),
-            kv_row("configured", k, "Buttons configured", format!(
-                "{} of {}",
-                s.settings.mappings.configured_buttons(),
-                ALL_BUTTONS.len()
-            )),
+            kv_row(
+                "capture",
+                k,
+                s.tr("Capture set"),
+                crate::status::acked_buttons_line(s.lang, &s.bridge.captured_usages),
+            ),
+            kv_row(
+                "configured",
+                k,
+                s.tr("Buttons configured"),
+                tr_fmt!(
+                    s.lang,
+                    "{} of {}",
+                    s.settings.mappings.configured_buttons(),
+                    ALL_BUTTONS.len()
+                ),
+            ),
             col()
                 .key("row-kv-counters")
                 .w_full()
                 .gap(space::S1)
                 .px(16.0)
                 .py(12.0)
-                .child(text("Counters".to_string()).font(HEADLINE).color(k.c.text_base))
                 .child(
-                    text(crate::status::counters_line(&s.bridge.counters))
+                    text(s.tr("Counters").to_string())
+                        .font(HEADLINE)
+                        .color(k.c.text_base),
+                )
+                .child(
+                    text(crate::status::counters_line(s.lang, &s.bridge.counters))
                         .key("kv-counters-value")
                         .wrap()
                         .font(type_::BODY)
@@ -373,29 +403,42 @@ fn status_section(s: &AppState, k: &Kit) -> El {
             kv_row(
                 "recovering",
                 k,
-                "Recovery",
-                if s.bridge.recovering { "Device-node recovery in progress" } else { "Idle" }.to_string(),
+                s.tr("Recovery"),
+                if s.bridge.recovering {
+                    s.tr("Device-node recovery in progress")
+                } else {
+                    s.tr("Idle")
+                }
+                .to_string(),
             ),
         ],
     );
-    let mut children = vec![group_header("Link", k), link, group_header("Capture", k), capture];
+    let mut children = vec![
+        group_header(s.tr("Link"), k),
+        link,
+        group_header(s.tr("Capture"), k),
+        capture,
+    ];
     // Before the bridge is connected the numbers above barely move; fill the
     // rest of the screen with the three setup steps instead of empty space.
     if s.bridge.phase != BridgePhase::Connected {
-        children.push(group_header("Getting started", k));
-        children.push(getting_started_card(k));
+        children.push(group_header(s.tr("Getting started"), k));
+        children.push(getting_started_card(k, s.lang));
     }
-    children.push(group_footer("Counters update every 500 ms from the bridge snapshot.", k));
-    form("status", "Status", "", k, children)
+    children.push(group_footer(
+        s.tr("Counters update every 500 ms from the bridge snapshot."),
+        k,
+    ));
+    form("status", s.tr("Status"), "", k, children)
 }
 
 /// The idle Status screen's next-steps card: one numbered row per setup
 /// step. Footnote-sized and tint-quiet, so it reads as guidance, not content.
-fn getting_started_card(k: &Kit) -> El {
+fn getting_started_card(k: &Kit, lang: Lang) -> El {
     let steps = [
-        "Install the helper, then start it — Helper tab.",
-        "Map what each button press does — Buttons tab.",
-        "Turn on enhanced capture — Capture tab.",
+        tr(lang, "Install the helper, then start it — Helper tab."),
+        tr(lang, "Map what each button press does — Buttons tab."),
+        tr(lang, "Turn on enhanced capture — Capture tab."),
     ];
     let rows = steps
         .iter()
@@ -432,15 +475,25 @@ fn getting_started_card(k: &Kit) -> El {
     group("getting-started", k, rows)
 }
 
+/// The voice-key synthesis picker's options, in stable order (the choice's
+/// index picks the target usage, whatever the wording).
+fn synth_options(lang: Lang) -> [&'static str; 3] {
+    [
+        tr(lang, "Off"),
+        tr(lang, "Left Alt (0x00E2)"),
+        tr(lang, "Right Alt (0x00E6)"),
+    ]
+}
+
 fn capture_section(s: &AppState, k: &Kit, layer: &mut Vec<El>) -> El {
     let mapped = s.settings.mappings.mapped_mask();
     let synth = s.settings.valid_voice_synth();
     let synth_label = match synth {
-        Some(0x00E2) => "Left Alt (0x00E2)",
-        Some(0x00E6) => "Right Alt (0x00E6)",
-        _ => "Off",
+        Some(0x00E2) => tr(s.lang, "Left Alt (0x00E2)"),
+        Some(0x00E6) => tr(s.lang, "Right Alt (0x00E6)"),
+        _ => tr(s.lang, "Off"),
     };
-    const SYNTH_OPTIONS: [&str; 3] = ["Off", "Left Alt (0x00E2)", "Right Alt (0x00E6)"];
+    let options = synth_options(s.lang);
 
     let master = group(
         "capture-master",
@@ -452,7 +505,12 @@ fn capture_section(s: &AppState, k: &Kit, layer: &mut Vec<El>) -> El {
             .gap(space::S3)
             .px(16.0)
             .py(space::S3)
-            .child(text("Enhanced capture".to_string()).grow(1.0).font(HEADLINE).color(k.c.text_base))
+            .child(
+                text(s.tr("Enhanced capture").to_string())
+                    .grow(1.0)
+                    .font(HEADLINE)
+                    .color(k.c.text_base),
+            )
             .child(
                 Switch::new(s.settings.capture_enabled)
                     .on_toggle(|s: &mut AppState| {
@@ -467,8 +525,18 @@ fn capture_section(s: &AppState, k: &Kit, layer: &mut Vec<El>) -> El {
         "capture-coverage",
         k,
         vec![
-            kv_row("mask", k, "Mapped buttons", format!("{}/13", mapped.count_ones())),
-            kv_row("set", k, "Requested set", crate::status::acked_buttons_line(&s.bridge.captured_usages)),
+            kv_row(
+                "mask",
+                k,
+                s.tr("Mapped buttons"),
+                format!("{}/13", mapped.count_ones()),
+            ),
+            kv_row(
+                "set",
+                k,
+                s.tr("Requested set"),
+                crate::status::acked_buttons_line(s.lang, &s.bridge.captured_usages),
+            ),
         ],
     );
 
@@ -486,15 +554,19 @@ fn capture_section(s: &AppState, k: &Kit, layer: &mut Vec<El>) -> El {
                 col()
                     .grow(1.0)
                     .gap(space::S1)
-                    .child(text("Voice key synthesis".to_string()).font(HEADLINE).color(k.c.text_base))
                     .child(
-                        text("Report-layer replacement of usage 0x003E")
+                        text(s.tr("Voice key synthesis").to_string())
+                            .font(HEADLINE)
+                            .color(k.c.text_base),
+                    )
+                    .child(
+                        text(s.tr("Report-layer replacement of usage 0x003E"))
                             .font(FOOTNOTE)
                             .color(k.c.text_faint),
                     ),
             )
             .child(
-                Select::new("synth-picker", &SYNTH_OPTIONS)
+                Select::new("synth-picker", &options)
                     .width(180.0)
                     .current(Some(synth_label))
                     .open(s.open_picker.as_deref() == Some("synth-picker"))
@@ -507,9 +579,9 @@ fn capture_section(s: &AppState, k: &Kit, layer: &mut Vec<El>) -> El {
                     .on_close(|s: &mut AppState| s.open_picker = None)
                     .on_choose(|s: &mut AppState, choice: &str, _: &mut Tx| {
                         s.open_picker = None;
-                        let to = match choice {
-                            "Left Alt (0x00E2)" => Some(0x00E2),
-                            "Right Alt (0x00E6)" => Some(0x00E6),
+                        let to = match synth_options(s.lang).iter().position(|o| *o == choice) {
+                            Some(1) => Some(0x00E2),
+                            Some(2) => Some(0x00E6),
                             _ => None,
                         };
                         s.set_voice_synth(to);
@@ -521,26 +593,31 @@ fn capture_section(s: &AppState, k: &Kit, layer: &mut Vec<El>) -> El {
     let always_names: Vec<&str> = ALWAYS_CAPTURED_BUTTONS.iter().map(|b| b.name()).collect();
     form(
         "capture",
-        "Capture",
-        "Enhanced capture owns the remote's keys at the HID report layer. Turn it off and the \
+        s.tr("Capture"),
+        s.tr(
+            "Enhanced capture owns the remote's keys at the HID report layer. Turn it off and the \
          remote behaves like a plain keyboard.",
+        ),
         k,
         vec![
             master,
             group_footer(
-                &format!(
+                &tr_fmt!(
+                    s.lang,
                     "While enabled, {} are always captured, even with no mappings configured.",
                     always_names.join(", ")
                 ),
                 k,
             ),
-            group_header("Coverage", k),
+            group_header(s.tr("Coverage"), k),
             coverage,
-            group_header("Voice key synthesis", k),
+            group_header(s.tr("Voice key synthesis"), k),
             synth_card,
             group_footer(
-                "Synthesizes the voice key (0x003E) into an Alt usage at the report layer; \
+                s.tr(
+                    "Synthesizes the voice key (0x003E) into an Alt usage at the report layer; \
                  targets are hardware-validated.",
+                ),
                 k,
             ),
         ],
@@ -737,26 +814,26 @@ fn leader_lines(p: &Placement, g: &CanvasGeom, color: rune::Color) -> Vec<El> {
 
 /// Short label for a picker trigger. The compact row shows the three gesture
 /// pickers side by side, so the chosen value shrinks to its essence; the
-/// picker's option list stays the full `PICKER_OPTIONS` wording.
-fn action_short_label(action: &ButtonAction) -> &'static str {
+/// picker's option list stays the full [`picker_options`] wording.
+fn action_short_label(lang: Lang, action: &ButtonAction) -> &'static str {
     match action {
         ButtonAction::Disabled => "—",
-        ButtonAction::Shortcut { .. } => "Shortcut",
+        ButtonAction::Shortcut { .. } => tr(lang, "Shortcut"),
         ButtonAction::MediaKey { key } => match key {
-            MediaKey::Mute => "Mute",
-            MediaKey::VolumeDown => "Vol-",
-            MediaKey::VolumeUp => "Vol+",
-            MediaKey::PlayPause => "Play",
-            MediaKey::Prev => "Prev",
-            MediaKey::Next => "Next",
+            MediaKey::Mute => tr(lang, "Mute"),
+            MediaKey::VolumeDown => tr(lang, "Vol-"),
+            MediaKey::VolumeUp => tr(lang, "Vol+"),
+            MediaKey::PlayPause => tr(lang, "Play"),
+            MediaKey::Prev => tr(lang, "Prev"),
+            MediaKey::Next => tr(lang, "Next"),
         },
         ButtonAction::MouseClick { button } => match button {
-            MouseButton::Left => "L-Click",
-            MouseButton::Right => "R-Click",
-            MouseButton::Middle => "M-Click",
+            MouseButton::Left => tr(lang, "L-Click"),
+            MouseButton::Right => tr(lang, "R-Click"),
+            MouseButton::Middle => tr(lang, "M-Click"),
         },
-        ButtonAction::MouseMove { .. } => "Move",
-        ButtonAction::Scroll { .. } => "Scroll",
+        ButtonAction::MouseMove { .. } => tr(lang, "Move"),
+        ButtonAction::Scroll { .. } => tr(lang, "Scroll"),
     }
 }
 
@@ -764,21 +841,32 @@ fn action_short_label(action: &ButtonAction) -> &'static str {
 /// dot, the name and three pickers, so the snake-case protocol names become
 /// their product labels (the volume rocker reads like the remote's own `+` /
 /// `-` glyphs). Element keys stay keyed by the protocol name.
-fn button_display_name(button: RemoteButton) -> &'static str {
+fn button_display_name(lang: Lang, button: RemoteButton) -> &'static str {
     match button {
-        RemoteButton::Power => "Power",
-        RemoteButton::Up => "Up",
-        RemoteButton::Down => "Down",
-        RemoteButton::Left => "Left",
-        RemoteButton::Right => "Right",
-        RemoteButton::Ok => "OK",
-        RemoteButton::Back => "Back",
-        RemoteButton::Home => "Home",
-        RemoteButton::Menu => "Menu",
-        RemoteButton::VolumeUp => "Vol +",
-        RemoteButton::VolumeDown => "Vol -",
-        RemoteButton::Tv => "TV",
-        RemoteButton::VolumeMute => "Mute",
+        RemoteButton::Power => tr(lang, "Power"),
+        RemoteButton::Up => tr(lang, "Up"),
+        RemoteButton::Down => tr(lang, "Down"),
+        RemoteButton::Left => tr(lang, "Left"),
+        RemoteButton::Right => tr(lang, "Right"),
+        RemoteButton::Ok => tr(lang, "OK"),
+        RemoteButton::Back => tr(lang, "Back"),
+        RemoteButton::Home => tr(lang, "Home"),
+        RemoteButton::Menu => tr(lang, "Menu"),
+        RemoteButton::VolumeUp => tr(lang, "Vol +"),
+        RemoteButton::VolumeDown => tr(lang, "Vol -"),
+        RemoteButton::Tv => tr(lang, "TV"),
+        RemoteButton::VolumeMute => tr(lang, "Mute"),
+    }
+}
+
+/// The gesture slot's display caption (for the pickers' accessible labels).
+/// Element keys keep the stable ASCII `Slot::caption()` spelling.
+fn slot_display_caption(lang: Lang, slot: Slot) -> &'static str {
+    match slot {
+        Slot::Single => tr(lang, "Single"),
+        Slot::Double => tr(lang, "Double"),
+        Slot::Long => tr(lang, "Long"),
+        Slot::HoldRepeat => tr(lang, "Repeat"),
     }
 }
 
@@ -807,7 +895,7 @@ fn button_card(s: &AppState, button: RemoteButton, k: &Kit, layer: &mut Vec<El>,
                 .key(format!("dot-{}", button.name())),
         )
         .child(
-            text(button_display_name(button).to_string())
+            text(button_display_name(s.lang, button))
                 .key(format!("name-{}", button.name()))
                 .font(HEADLINE)
                 .grow(1.0)
@@ -822,14 +910,19 @@ fn button_card(s: &AppState, button: RemoteButton, k: &Kit, layer: &mut Vec<El>,
             .settings
             .mappings
             .slot_action(button, slot)
-            .map(action_short_label)
+            .map(|a| action_short_label(s.lang, a))
             .unwrap_or("—");
+        let options = picker_options(s.lang);
         main = main.child({
             // Mini field: the kit trigger with its paddings tightened for the
             // compact row, so the short labels fit the `pick_w` box.
-            Select::new(pick_key.clone(), &PICKER_OPTIONS)
+            Select::new(pick_key.clone(), &options)
                 .appearance(SelectAppearance::Field)
-                .label(format!("{} {}", button_display_name(button), slot.caption()))
+                .label(format!(
+                    "{} {}",
+                    button_display_name(s.lang, button),
+                    slot_display_caption(s.lang, slot)
+                ))
                 .width(pick_w)
                 .current(Some(current))
                 .open(s.open_picker.as_deref() == Some(pick_key.as_str()))
@@ -870,10 +963,12 @@ fn button_card(s: &AppState, button: RemoteButton, k: &Kit, layer: &mut Vec<El>,
                     .placeholder("Ctrl+Alt+F5")
                     .width(Some(field_w))
                     .invalid(error.is_some())
-                    .on_edit(move |s: &mut AppState| match s.shortcut_edits.get_mut(&edit_key) {
-                        Some(edit) => edit,
-                        None => panic!("shortcut draft exists for edited slot"),
-                    })
+                    .on_edit(
+                        move |s: &mut AppState| match s.shortcut_edits.get_mut(&edit_key) {
+                            Some(edit) => edit,
+                            None => panic!("shortcut draft exists for edited slot"),
+                        },
+                    )
                     .on_change(move |s: &mut AppState, _: &mut Tx| s.shortcut_edited(button, slot))
                     .build(k),
             );
@@ -901,14 +996,12 @@ fn button_card(s: &AppState, button: RemoteButton, k: &Kit, layer: &mut Vec<El>,
     // competing with the row's layout.
     if pressed {
         card = card.child(
-            el()
-                .absolute(card_w - 66.0, -9.0)
-                .child(
-                    Badge::new("pressed")
-                        .variant(BadgeVariant::Accent)
-                        .build(k)
-                        .key(format!("pressed-{}", button.name().to_ascii_lowercase())),
-                ),
+            el().absolute(card_w - 66.0, -9.0).child(
+                Badge::new(s.tr("pressed"))
+                    .variant(BadgeVariant::Accent)
+                    .build(k)
+                    .key(format!("pressed-{}", button.name().to_ascii_lowercase())),
+            ),
         );
     }
     for draft in drafts {
@@ -956,14 +1049,16 @@ fn buttons_section(s: &AppState, k: &Kit, layer: &mut Vec<El>) -> El {
 
     form(
         "buttons",
-        "Buttons",
-        "Pick what each press, double press and long press does. Changes persist immediately \
+        s.tr("Buttons"),
+        s.tr(
+            "Pick what each press, double press and long press does. Changes persist immediately \
          and update the capture set.",
+        ),
         k,
         vec![
             canvas,
             // The 13th button has no physical spot on the RC003 body.
-            group_header("Also on this remote", k),
+            group_header(s.tr("Also on this remote"), k),
             // A little wider than the canvas cards: it stands alone, with no
             // photo between it and the window edge.
             row().w_full().center().child(button_card(s, RemoteButton::VolumeMute, k, layer, 360.0)),
@@ -975,15 +1070,35 @@ fn helper_section(s: &AppState, k: &Kit) -> El {
     let status_line = s
         .task_status
         .as_ref()
-        .map(|st: &TaskStatus| st.label())
-        .unwrap_or_else(|| "Not checked yet".to_string());
+        .map(|st: &TaskStatus| st.label(s.lang))
+        .unwrap_or_else(|| s.tr("Not checked yet").to_string());
 
     let mut actions = row().key("helper-buttons").gap(space::S2);
     for (key, label, variant, command) in [
-        ("install", "Install helper task (UAC once)", ButtonVariant::Submit, HelperCommand::Install),
-        ("start", "Start helper", ButtonVariant::Neutral, HelperCommand::Start),
-        ("stop", "Stop helper", ButtonVariant::Neutral, HelperCommand::Stop),
-        ("remove", "Remove task", ButtonVariant::Danger, HelperCommand::Remove),
+        (
+            "install",
+            s.tr("Install helper task (UAC once)"),
+            ButtonVariant::Submit,
+            HelperCommand::Install,
+        ),
+        (
+            "start",
+            s.tr("Start helper"),
+            ButtonVariant::Neutral,
+            HelperCommand::Start,
+        ),
+        (
+            "stop",
+            s.tr("Stop helper"),
+            ButtonVariant::Neutral,
+            HelperCommand::Stop,
+        ),
+        (
+            "remove",
+            s.tr("Remove task"),
+            ButtonVariant::Danger,
+            HelperCommand::Remove,
+        ),
     ] {
         actions = actions.child(
             Button::new(label)
@@ -1008,7 +1123,7 @@ fn helper_section(s: &AppState, k: &Kit) -> El {
                 .px(16.0)
                 .py(space::S3)
                 .child(
-                    text("Task status".to_string())
+                    text(s.tr("Task status").to_string())
                         .grow(1.0)
                         .font(HEADLINE)
                         .color(k.c.text_base),
@@ -1017,7 +1132,7 @@ fn helper_section(s: &AppState, k: &Kit) -> El {
                 // button, like a SwiftUI LabeledContent with a trailing action.
                 .child(text(status_line).key("helper-status").font(type_::BODY).color(k.c.text_muted))
                 .child(
-                    Button::new("Check status")
+                    Button::new(s.tr("Check status"))
                         .variant(ButtonVariant::Ghost)
                         .disabled(s.task_busy)
                         .on_press(|s: &mut AppState| s.run_helper_command(HelperCommand::RefreshStatus))
@@ -1029,7 +1144,13 @@ fn helper_section(s: &AppState, k: &Kit) -> El {
 
     let mut extras: Vec<El> = Vec::new();
     if s.task_busy {
-        extras.push(text("Working…").key("helper-busy").font(FOOTNOTE).color(k.c.text_faint).pl(16.0));
+        extras.push(
+            text(s.tr("Working…"))
+                .key("helper-busy")
+                .font(FOOTNOTE)
+                .color(k.c.text_faint)
+                .pl(16.0),
+        );
     }
     if let Some(note) = &s.task_note {
         extras.push(text(note.clone()).key("helper-note").font(FOOTNOTE).color(k.c.text_faint).pl(16.0));
@@ -1037,16 +1158,18 @@ fn helper_section(s: &AppState, k: &Kit) -> El {
 
     form(
         "helper",
-        "Helper",
+        s.tr("Helper"),
         "",
         k,
-        std::iter::once(group_header("Scheduled task", k))
+        std::iter::once(group_header(s.tr("Scheduled task"), k))
             .chain(std::iter::once(task_card))
             .chain(extras)
             .chain(std::iter::once(group_footer(
-                "The helper runs elevated via one scheduled task: install it once (UAC), then \
+                s.tr(
+                    "The helper runs elevated via one scheduled task: install it once (UAC), then \
                  start and stop it without prompts. It connects to the bridge pipe and does all \
                  elevated work. It exits on app disconnect by design; the bridge keeps running.",
+                ),
                 k,
             )))
             .collect(),
@@ -1054,15 +1177,24 @@ fn helper_section(s: &AppState, k: &Kit) -> El {
 }
 
 fn settings_section(s: &AppState, k: &Kit) -> El {
-    const DARK_OPTIONS: [&str; 3] = ["Auto", "Light", "Dark"];
+    let dark_options = [s.tr("Auto"), s.tr("Light"), s.tr("Dark")];
     let selected = match s.settings.window.dark {
         None => 0,
         Some(false) => 1,
         Some(true) => 2,
     };
+    let language_options = [s.tr("System"), s.tr("English"), s.tr("简体中文")];
+    let language_selected = match s.settings.language {
+        Language::System => 0,
+        Language::En => 1,
+        Language::Zh => 2,
+    };
     let path = crate::settings::app_dir()
         .map(|dir| crate::settings::settings_path(&dir).display().to_string())
-        .unwrap_or_else(|| "settings.json (LOCALAPPDATA unavailable: not persisted this run)".to_string());
+        .unwrap_or_else(|| {
+            s.tr("settings.json (LOCALAPPDATA unavailable: not persisted this run)")
+                .to_string()
+        });
 
     let appearance = group(
         "settings-appearance",
@@ -1074,9 +1206,14 @@ fn settings_section(s: &AppState, k: &Kit) -> El {
             .gap(space::S3)
             .px(16.0)
             .py(space::S3)
-            .child(text("Appearance".to_string()).grow(1.0).font(HEADLINE).color(k.c.text_base))
             .child(
-                SegmentedControl::new(&DARK_OPTIONS, Some(selected))
+                text(s.tr("Appearance").to_string())
+                    .grow(1.0)
+                    .font(HEADLINE)
+                    .color(k.c.text_base),
+            )
+            .child(
+                SegmentedControl::new(&dark_options, Some(selected))
                     .label("Appearance")
                     .fit()
                     .on_pick(|s: &mut AppState, index, _: &mut Tx| {
@@ -1091,11 +1228,46 @@ fn settings_section(s: &AppState, k: &Kit) -> El {
             )],
     );
 
+    // The language picker: index-based like the tabs, so the option labels
+    // ("跟随系统"/"English"/"简体中文") can be any wording. `System` follows
+    // the OS on the next run; picking English or Chinese redraws at once.
+    let language = group(
+        "settings-language",
+        k,
+        vec![row()
+            .key("language-row")
+            .w_full()
+            .center_y()
+            .gap(space::S3)
+            .px(16.0)
+            .py(space::S3)
+            .child(
+                text(s.tr("Language").to_string())
+                    .grow(1.0)
+                    .font(HEADLINE)
+                    .color(k.c.text_base),
+            )
+            .child(
+                SegmentedControl::new(&language_options, Some(language_selected))
+                    .label("Language")
+                    .fit()
+                    .on_pick(|s: &mut AppState, index, _: &mut Tx| {
+                        s.set_language(match index {
+                            1 => Language::En,
+                            2 => Language::Zh,
+                            _ => Language::System,
+                        });
+                    })
+                    .build(k)
+                    .key("language-tabs"),
+            )],
+    );
+
     let storage = group(
         "settings-storage",
         k,
         vec![
-            kv_row("path", k, "Settings file", path),
+            kv_row("path", k, s.tr("Settings file"), path),
             row()
                 .key("settings-actions")
                 .w_full()
@@ -1103,7 +1275,7 @@ fn settings_section(s: &AppState, k: &Kit) -> El {
                 .px(16.0)
                 .py(space::S3)
                 .child(
-                    Button::new("Save now")
+                    Button::new(s.tr("Save now"))
                         .variant(ButtonVariant::Neutral)
                         .on_press(|s: &mut AppState| {
                             s.persist();
@@ -1112,7 +1284,7 @@ fn settings_section(s: &AppState, k: &Kit) -> El {
                         .key("settings-save"),
                 )
                 .child(
-                    Button::new("Reload from disk")
+                    Button::new(s.tr("Reload from disk"))
                         .variant(ButtonVariant::Ghost)
                         .on_press(|s: &mut AppState| s.reload_settings())
                         .build(k)
@@ -1121,7 +1293,14 @@ fn settings_section(s: &AppState, k: &Kit) -> El {
         ],
     );
 
-    let mut children = vec![group_header("Appearance", k), appearance, group_header("Storage", k), storage];
+    let mut children = vec![
+        group_header(s.tr("Appearance"), k),
+        appearance,
+        group_header(s.tr("Language"), k),
+        language,
+        group_header(s.tr("Storage"), k),
+        storage,
+    ];
     if let Some(error) = &s.save_error {
         children.push(
             text(error.clone())
@@ -1131,15 +1310,19 @@ fn settings_section(s: &AppState, k: &Kit) -> El {
                 .pl(16.0),
         );
     }
-    form("settings", "Settings", "", k, children)
+    form("settings", s.tr("Settings"), "", k, children)
 }
 
 /// The bottom toolbar: live pressed state on the left, capture state on the
 /// right, over a hairline top border.
 fn bottom_bar(s: &AppState, k: &Kit) -> El {
-    let pressed = crate::engine::pressed_names(s.pressed).join(", ");
-    let any_pressed = !pressed.is_empty();
-    let pressed = if pressed.is_empty() { "none".to_string() } else { pressed };
+    let pressed_names = crate::engine::pressed_names(s.pressed).join(", ");
+    let any_pressed = !pressed_names.is_empty();
+    let pressed = if pressed_names.is_empty() {
+        s.tr("none").to_string()
+    } else {
+        pressed_names
+    };
     col()
         .key("footer-wrap")
         .w_full()
@@ -1153,24 +1336,32 @@ fn bottom_bar(s: &AppState, k: &Kit) -> El {
                 .px(space::S6)
                 .py(space::S2)
                 .fill(k.c.bg_base)
-        .child(dot(if any_pressed { k.c.bg_accent } else { k.c.text_faint }))
-        .child(
-            text(format!("Pressed: {pressed}"))
-                .key("footer-pressed")
-                .font(FOOTNOTE)
-                .color(k.c.text_faint),
-        )
-        .child(el().grow(1.0))
-        .child(dot(if s.settings.capture_enabled { k.c.bg_accent } else { k.c.text_faint }))
-        .child(
-            text(if s.settings.capture_enabled {
-                "Enhanced capture on"
-            } else {
-                "Enhanced capture off"
-            })
-            .key("footer-capture")
-            .font(FOOTNOTE)
-            .color(k.c.text_faint),
-            ),
+                .child(dot(if any_pressed {
+                    k.c.bg_accent
+                } else {
+                    k.c.text_faint
+                }))
+                .child(
+                    text(tr_fmt!(s.lang, "Pressed: {}", pressed))
+                        .key("footer-pressed")
+                        .font(FOOTNOTE)
+                        .color(k.c.text_faint),
+                )
+                .child(el().grow(1.0))
+                .child(dot(if s.settings.capture_enabled {
+                    k.c.bg_accent
+                } else {
+                    k.c.text_faint
+                }))
+                .child(
+                    text(if s.settings.capture_enabled {
+                        s.tr("Enhanced capture on")
+                    } else {
+                        s.tr("Enhanced capture off")
+                    })
+                    .key("footer-capture")
+                    .font(FOOTNOTE)
+                    .color(k.c.text_faint),
+                ),
         )
 }

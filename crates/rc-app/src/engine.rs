@@ -44,6 +44,9 @@ pub struct PumpInit {
     pub mappings: ButtonMappings,
     pub capture_enabled: bool,
     pub voice_synth_to: Option<u16>,
+    /// The UI language, for the one user-facing notice the pump can emit
+    /// (the fatal overlay when the event channel dies).
+    pub lang: crate::i18n::Lang,
 }
 
 /// Spawn the pump thread. `on_notice` is called from the pump thread; the UI
@@ -106,7 +109,9 @@ pub fn pump_loop(
                 }
                 Err(RecvTimeoutError::Timeout) => break,
                 Err(RecvTimeoutError::Disconnected) => {
-                    on_notice(UiNotice::Fatal("The bridge event channel closed".into()));
+                    on_notice(UiNotice::Fatal(
+                        crate::i18n::tr(init.lang, "The bridge event channel closed").into(),
+                    ));
                     stop.store(true, Ordering::Relaxed);
                     break;
                 }
@@ -177,7 +182,12 @@ mod tests {
     use std::sync::mpsc;
 
     fn init(mappings: ButtonMappings) -> PumpInit {
-        PumpInit { mappings, capture_enabled: true, voice_synth_to: None }
+        PumpInit {
+            mappings,
+            capture_enabled: true,
+            voice_synth_to: None,
+            lang: crate::i18n::Lang::En,
+        }
     }
 
     fn fast_timings() -> PumpTimings {

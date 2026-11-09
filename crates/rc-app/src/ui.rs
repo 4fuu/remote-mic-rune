@@ -10,59 +10,70 @@ use rune::{AppHandle, TextEdit, Tx};
 use rc_protocol::{ALL_BUTTONS, RemoteButton};
 
 use crate::bridge_api::{BridgeStatus, SharedBridge, SharedEngine, UiNotice};
+use crate::i18n::{tr, tr_fmt, Lang, Language};
 use crate::mappings::{ButtonAction, MediaKey, MouseButton, Slot};
 use crate::settings::AppSettings;
 use crate::task::TaskStatus;
 
-/// The action picker's options (V1 editor). Media keys, shortcut and mouse
-/// clicks; `MouseMove`/`Scroll` actions can only arrive from hand-edited
-/// settings files and display under their own short labels (see
-/// `ButtonAction` matching in `action_short_label`).
-pub const PICKER_OPTIONS: [&str; 11] = [
-    "Disabled",
-    MediaKey::Mute.label(),
-    MediaKey::VolumeDown.label(),
-    MediaKey::VolumeUp.label(),
-    MediaKey::PlayPause.label(),
-    MediaKey::Prev.label(),
-    MediaKey::Next.label(),
-    "Shortcut",
-    MouseButton::Left.label(),
-    MouseButton::Right.label(),
-    MouseButton::Middle.label(),
-];
+/// The action picker's options (V1 editor) in the UI's language. Media keys,
+/// shortcut and mouse clicks; `MouseMove`/`Scroll` actions can only arrive
+/// from hand-edited settings files and display under their own short labels
+/// (see `ButtonAction` matching in `action_short_label`).
+///
+/// The ORDER is the stable action identity: the kit hands back the chosen
+/// display string, which [`AppState::choose_action`] looks up in the same
+/// list it was shown from, so translating the labels cannot break selection.
+pub fn picker_options(lang: Lang) -> [&'static str; 11] {
+    [
+        tr(lang, "Disabled"),
+        tr(lang, "Media: Mute"),
+        tr(lang, "Media: Vol -"),
+        tr(lang, "Media: Vol +"),
+        tr(lang, "Media: Play"),
+        tr(lang, "Media: Prev"),
+        tr(lang, "Media: Next"),
+        tr(lang, "Shortcut"),
+        tr(lang, "Mouse: Left"),
+        tr(lang, "Mouse: Right"),
+        tr(lang, "Mouse: Middle"),
+    ]
+}
 
-/// Map a picker label back to its action. `Disabled` maps to None (the slot
-/// is cleared); an unknown label leaves the mapping untouched.
-pub fn action_from_label(label: &str) -> Option<ButtonAction> {
-    match label {
-        "Disabled" => None,
-        "Shortcut" => Some(ButtonAction::Shortcut { chord: Vec::new() }),
-        other => {
-            let media = [
-                (MediaKey::Mute.label(), MediaKey::Mute),
-                (MediaKey::VolumeDown.label(), MediaKey::VolumeDown),
-                (MediaKey::VolumeUp.label(), MediaKey::VolumeUp),
-                (MediaKey::PlayPause.label(), MediaKey::PlayPause),
-                (MediaKey::Prev.label(), MediaKey::Prev),
-                (MediaKey::Next.label(), MediaKey::Next),
-            ]
-            .into_iter()
-            .find(|(name, _)| *name == other)
-            .map(|(_, key)| key);
-            if let Some(key) = media {
-                return Some(ButtonAction::MediaKey { key });
-            }
-            let mouse = [
-                (MouseButton::Left.label(), MouseButton::Left),
-                (MouseButton::Right.label(), MouseButton::Right),
-                (MouseButton::Middle.label(), MouseButton::Middle),
-            ]
-            .into_iter()
-            .find(|(name, _)| *name == other)
-            .map(|(_, button)| button);
-            mouse.map(|button| ButtonAction::MouseClick { button })
-        }
+/// The action [`picker_options`]' index stands for. Index 0 (`Disabled`)
+/// maps to None: the slot is cleared. Indexes past the list cannot occur
+/// from a picker (the kit only hands back shown options), and callers treat
+/// unknown choices as "leave the mapping untouched".
+pub fn action_for_picker_index(index: usize) -> Option<ButtonAction> {
+    match index {
+        1 => Some(ButtonAction::MediaKey {
+            key: MediaKey::Mute,
+        }),
+        2 => Some(ButtonAction::MediaKey {
+            key: MediaKey::VolumeDown,
+        }),
+        3 => Some(ButtonAction::MediaKey {
+            key: MediaKey::VolumeUp,
+        }),
+        4 => Some(ButtonAction::MediaKey {
+            key: MediaKey::PlayPause,
+        }),
+        5 => Some(ButtonAction::MediaKey {
+            key: MediaKey::Prev,
+        }),
+        6 => Some(ButtonAction::MediaKey {
+            key: MediaKey::Next,
+        }),
+        7 => Some(ButtonAction::Shortcut { chord: Vec::new() }),
+        8 => Some(ButtonAction::MouseClick {
+            button: MouseButton::Left,
+        }),
+        9 => Some(ButtonAction::MouseClick {
+            button: MouseButton::Right,
+        }),
+        10 => Some(ButtonAction::MouseClick {
+            button: MouseButton::Middle,
+        }),
+        _ => None,
     }
 }
 
@@ -85,7 +96,18 @@ impl Section {
         Section::Settings,
     ];
 
-    pub const LABELS: [&'static str; 5] = ["Status", "Capture", "Buttons", "Helper", "Settings"];
+    /// Display labels in the UI's language, in [`Section::ALL`] order (the
+    /// segmented control's pick callback is index-based, so the tabs' action
+    /// identity survives any wording).
+    pub fn labels(lang: Lang) -> [&'static str; 5] {
+        [
+            tr(lang, "Status"),
+            tr(lang, "Capture"),
+            tr(lang, "Buttons"),
+            tr(lang, "Helper"),
+            tr(lang, "Settings"),
+        ]
+    }
 
     pub fn index(self) -> usize {
         Section::ALL.iter().position(|s| *s == self).expect("ALL covers every section")
@@ -109,7 +131,7 @@ pub struct Services {
 pub struct Startup {
     pub settings: AppSettings,
     pub settings_dir: Option<PathBuf>,
-    pub load_warning: Option<String>,
+    pub load_warning: Option<crate::settings::LoadWarning>,
     pub launch_error: Option<String>,
     pub bridge_status: BridgeStatus,
     pub services: Services,
@@ -167,6 +189,9 @@ pub struct AppState {
     pub settings: AppSettings,
     /// Where settings.json lives (None: persistence off, e.g. headless tests).
     pub settings_dir: Option<PathBuf>,
+    /// The resolved UI language (settings.language with `System` resolved),
+    /// recomputed when the setting changes; every render reads it.
+    pub lang: Lang,
     /// Active section tab.
     pub section: Section,
     /// Corruption note from loading; shown until dismissed.
@@ -201,10 +226,17 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// State for headless state tests: no services, no persistence.
+    /// State for headless state tests: no services, no persistence. The
+    /// language is forced — `System` and `En` both render English, an
+    /// explicit `Zh` renders Chinese — so no test depends on the host
+    /// locale.
     #[cfg(test)]
     pub fn for_test(settings: AppSettings) -> AppState {
         let mut state = AppState {
+            lang: match settings.language {
+                Language::Zh => Lang::Zh,
+                _ => Lang::En,
+            },
             settings,
             settings_dir: None,
             section: Section::Status,
@@ -231,11 +263,13 @@ impl AppState {
     /// Build from the [`Startup`] handoff.
     pub fn from_startup() -> AppState {
         let startup = take_startup();
+        let lang = startup.settings.language.resolve();
         let mut state = AppState {
+            lang,
             settings: startup.settings,
             settings_dir: startup.settings_dir,
             section: Section::Status,
-            warning: startup.load_warning,
+            warning: startup.load_warning.map(|w| w.message(lang)),
             launch_error: startup.launch_error,
             bridge: startup.bridge_status,
             pressed: 0,
@@ -253,6 +287,12 @@ impl AppState {
         // Existing shortcut mappings get drafts so their fields show at once.
         state.seed_shortcut_drafts();
         state
+    }
+
+    /// Translate one UI string in this app's language (the English source
+    /// text is the key).
+    pub(crate) fn tr(&self, key: &'static str) -> &'static str {
+        tr(self.lang, key)
     }
 
     /// Pre-creates a shortcut draft for every slot already holding a
@@ -288,7 +328,7 @@ impl AppState {
         let Some(dir) = self.settings_dir.clone() else { return };
         match crate::settings::save(&dir, &self.settings) {
             Ok(()) => self.save_error = None,
-            Err(why) => self.save_error = Some(why),
+            Err(why) => self.save_error = Some(why.message(self.lang)),
         }
     }
 
@@ -323,11 +363,25 @@ impl AppState {
         }
     }
 
+    /// The Settings section's language picker: re-resolve the render
+    /// language, persist, and let the next frame redraw (no restart).
+    pub fn set_language(&mut self, language: Language) {
+        self.settings.language = language;
+        self.lang = language.resolve();
+        self.persist();
+    }
+
     /// One picker choose: update the mapping, keep the shortcut draft in
-    /// sync, persist and push everything downstream.
-    pub fn choose_action(&mut self, button: RemoteButton, slot: Slot, label: &str) {
+    /// sync, persist and push everything downstream. `choice` is the display
+    /// string of an option in [`picker_options`] (the kit hands it back);
+    /// its position in this language's list picks the action, so an unknown
+    /// or stale choice leaves the mapping untouched.
+    pub fn choose_action(&mut self, button: RemoteButton, slot: Slot, choice: &str) {
+        let Some(index) = picker_options(self.lang).iter().position(|o| *o == choice) else {
+            return;
+        };
         let key = slot_key(button, slot);
-        match action_from_label(label) {
+        match action_for_picker_index(index) {
             None => {
                 self.settings.mappings.set_slot_action(button, slot, None);
                 self.shortcut_edits.remove(&key);
@@ -361,7 +415,7 @@ impl AppState {
         let key = slot_key(button, slot);
         let Some(edit) = self.shortcut_edits.get(&key) else { return };
         let draft = edit.text.clone();
-        match crate::chord::parse_chord(&draft) {
+        match crate::chord::parse_chord(self.lang, &draft) {
             Ok(chord) => {
                 self.chord_errors.remove(&key);
                 self.settings
@@ -380,12 +434,15 @@ impl AppState {
         self.persist();
     }
 
-    /// Reload settings.json from disk (the Settings section's button).
+    /// Reload settings.json from disk (the Settings section's button). The
+    /// file may carry a different language, so the render language resolves
+    /// from what loaded.
     pub fn reload_settings(&mut self) {
         let Some(dir) = self.settings_dir.clone() else { return };
         let loaded = crate::settings::load(&dir);
         self.settings = loaded.settings;
-        self.warning = loaded.warning;
+        self.lang = self.settings.language.resolve();
+        self.warning = loaded.warning.map(|w| w.message(self.lang));
         self.after_mappings_change();
         self.set_voice_synth(self.settings.valid_voice_synth());
     }
@@ -398,13 +455,15 @@ impl AppState {
         }
         self.task_busy = true;
         self.task_note = None;
+        let lang = self.lang;
         let Some(ui) = self.ui.clone() else {
             self.task_busy = false;
-            self.task_note = Some("No UI handle: helper commands need the windowed app".to_string());
+            self.task_note =
+                Some(tr(lang, "No UI handle: helper commands need the windowed app").to_string());
             return;
         };
         std::thread::spawn(move || {
-            let outcome = run_helper_blocking(command);
+            let outcome = run_helper_blocking(command, lang);
             ui.update(move |s: &mut AppState, _: &mut Tx| s.task_command_done(outcome));
         });
     }
@@ -428,30 +487,30 @@ pub struct HelperOutcome {
 
 /// One helper command, run to completion (worker thread context). Always
 /// follows up with a status query so the screen stays honest.
-fn run_helper_blocking(command: HelperCommand) -> HelperOutcome {
+fn run_helper_blocking(command: HelperCommand, lang: Lang) -> HelperOutcome {
     let note = match command {
-        HelperCommand::Install => {
-            crate::task::helper_path()
-                .and_then(|helper| crate::task::install_task(&helper))
-                .map(|()| "Helper task installed (UAC answered)".to_string())
-        }
-        HelperCommand::Remove => {
-            crate::task::helper_path()
-                .and_then(|helper| crate::task::remove_task(&helper))
-                .map(|()| "Helper task removed".to_string())
-        }
-        HelperCommand::Start => crate::task::start_task().and_then(|out| {
+        HelperCommand::Install => crate::task::helper_path(lang)
+            .and_then(|helper| crate::task::install_task(lang, &helper))
+            .map(|()| tr(lang, "Helper task installed (UAC answered)").to_string()),
+        HelperCommand::Remove => crate::task::helper_path(lang)
+            .and_then(|helper| crate::task::remove_task(lang, &helper))
+            .map(|()| tr(lang, "Helper task removed").to_string()),
+        HelperCommand::Start => crate::task::start_task(lang).and_then(|out| {
             if out.ok() {
-                Ok("Helper start requested".to_string())
+                Ok(tr(lang, "Helper start requested").to_string())
             } else {
-                Err(format!("schtasks /run failed: {}", first_line(&out.stderr, &out.stdout)))
+                Err(tr_fmt!(lang, "schtasks /run failed: {}", first_line(lang, &out.stderr, &out.stdout)))
             }
         }),
-        HelperCommand::Stop => crate::task::stop_task().and_then(|out| {
+        HelperCommand::Stop => crate::task::stop_task(lang).and_then(|out| {
             if out.ok() {
-                Ok("Helper stop requested (it exits on disconnect by design; the bridge keeps running)".to_string())
+                Ok(tr(
+                    lang,
+                    "Helper stop requested (it exits on disconnect by design; the bridge keeps running)",
+                )
+                .to_string())
             } else {
-                Err(format!("schtasks /end failed: {}", first_line(&out.stderr, &out.stdout)))
+                Err(tr_fmt!(lang, "schtasks /end failed: {}", first_line(lang, &out.stderr, &out.stdout)))
             }
         }),
         HelperCommand::RefreshStatus => Ok(String::new()),
@@ -463,10 +522,10 @@ fn run_helper_blocking(command: HelperCommand) -> HelperOutcome {
     let status = if failed {
         None
     } else {
-        match crate::task::query_task_status() {
+        match crate::task::query_task_status(lang) {
             Ok(status) => {
                 if note.is_empty() {
-                    note = status.label();
+                    note = status.label(lang);
                 }
                 Some(status)
             }
@@ -481,12 +540,12 @@ fn run_helper_blocking(command: HelperCommand) -> HelperOutcome {
     HelperOutcome { note, status }
 }
 
-fn first_line(a: &str, b: &str) -> String {
+fn first_line(lang: Lang, a: &str, b: &str) -> String {
     let source = if a.trim().is_empty() { b } else { a };
     source
         .lines()
         .next()
-        .unwrap_or("(no output)")
+        .unwrap_or(tr(lang, "(no output)"))
         .chars()
         .take(120)
         .collect()
@@ -521,6 +580,12 @@ mod tests {
         let Some(dir) = std::env::var_os("RC_APP_SNAP_DIR").map(std::path::PathBuf::from) else {
             return;
         };
+        // The snapshots exist to verify the localized UI: Chinese unless a
+        // run asks for English (RC_APP_SNAP_LANG=en) for comparison.
+        let snapshot_lang = match std::env::var("RC_APP_SNAP_LANG").as_deref() {
+            Ok("en") => Language::En,
+            _ => Language::Zh,
+        };
         std::fs::create_dir_all(&dir).unwrap();
         use rune::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer, write_png};
 
@@ -528,6 +593,7 @@ mod tests {
         let mut settings = settings_with_mappings();
         settings.window.dark = Some(false); // the SwiftUI-style light look
         settings.capture_enabled = true;
+        settings.language = snapshot_lang;
         // `buttons` renders narrow (the scale-down regression case) and
         // `buttons-wide` at the window the app now opens at: cards pin to the
         // content edges, the photo stays centered, sizes stay at scale 1.
@@ -596,21 +662,61 @@ mod tests {
     // -- pure state transitions ---------------------------------------------
 
     #[test]
-    fn labels_round_trip_into_actions() {
-        assert_eq!(action_from_label("Disabled"), None);
+    fn picker_options_round_trip_to_actions() {
+        // The option order is the action identity, in every language.
+        assert_eq!(action_for_picker_index(0), None, "Disabled clears the slot");
         assert_eq!(
-            action_from_label("Media: Vol +"),
-            Some(ButtonAction::MediaKey { key: MediaKey::VolumeUp })
-        );
-        assert_eq!(
-            action_from_label("Mouse: Right"),
-            Some(ButtonAction::MouseClick { button: MouseButton::Right })
-        );
-        assert_eq!(
-            action_from_label("Shortcut"),
+            action_for_picker_index(7),
             Some(ButtonAction::Shortcut { chord: vec![] })
         );
-        assert_eq!(action_from_label("nonsense"), None);
+        assert_eq!(
+            action_for_picker_index(4),
+            Some(ButtonAction::MediaKey {
+                key: MediaKey::PlayPause
+            })
+        );
+        assert_eq!(
+            action_for_picker_index(9),
+            Some(ButtonAction::MouseClick {
+                button: MouseButton::Right
+            })
+        );
+        for lang in [Lang::En, Lang::Zh] {
+            let options = picker_options(lang);
+            assert_eq!(options.len(), 11);
+            // Every label finds its own index again — choose_action's lookup.
+            for (index, label) in options.iter().enumerate() {
+                assert_eq!(
+                    options.iter().position(|o| o == label),
+                    Some(index),
+                    "{label:?}"
+                );
+            }
+        }
+        assert_eq!(picker_options(Lang::Zh)[4], "媒体：播放");
+        assert_eq!(picker_options(Lang::En)[0], "Disabled");
+    }
+
+    #[test]
+    fn choosing_a_chinese_label_selects_the_action() {
+        let mut s = AppState::for_test(AppSettings::default());
+        s.lang = Lang::Zh;
+        s.choose_action(RemoteButton::Ok, Slot::Double, "媒体：静音");
+        assert_eq!(
+            s.settings
+                .mappings
+                .slot_action(RemoteButton::Ok, Slot::Double),
+            Some(&ButtonAction::MediaKey {
+                key: MediaKey::Mute
+            })
+        );
+        s.choose_action(RemoteButton::Ok, Slot::Double, "快捷键");
+        assert_eq!(
+            s.settings
+                .mappings
+                .slot_action(RemoteButton::Ok, Slot::Double),
+            Some(&ButtonAction::Shortcut { chord: vec![] })
+        );
     }
 
     #[test]
@@ -625,8 +731,12 @@ mod tests {
 
         s.choose_action(RemoteButton::Ok, Slot::Double, "Media: Play");
         assert_eq!(
-            s.settings.mappings.slot_action(RemoteButton::Ok, Slot::Double),
-            Some(&ButtonAction::MediaKey { key: MediaKey::PlayPause })
+            s.settings
+                .mappings
+                .slot_action(RemoteButton::Ok, Slot::Double),
+            Some(&ButtonAction::MediaKey {
+                key: MediaKey::PlayPause
+            })
         );
         assert_eq!(
             engine.state().mappings.as_ref().map(|m| m.mapped_mask()),
@@ -644,6 +754,22 @@ mod tests {
         s.choose_action(RemoteButton::Home, Slot::Single, "Disabled");
         assert_eq!(s.settings.mappings.slot_action(RemoteButton::Home, Slot::Single), None);
         assert!(!s.settings.mappings.buttons.contains_key(RemoteButton::Home.name()));
+    }
+
+    #[test]
+    fn choosing_an_unknown_option_leaves_the_mapping_alone() {
+        let mut s = AppState::for_test(settings_with_mappings());
+        // A stale option (language switched mid-gesture, hand-driven call)
+        // must not wipe the mapping.
+        s.choose_action(RemoteButton::Home, Slot::Single, "不存在");
+        assert_eq!(
+            s.settings
+                .mappings
+                .slot_action(RemoteButton::Home, Slot::Single),
+            Some(&ButtonAction::Shortcut {
+                chord: vec![vk::CONTROL, vk::F5]
+            })
+        );
     }
 
     #[test]
@@ -723,12 +849,55 @@ mod tests {
     }
 
     #[test]
+    fn set_language_re_resolves_and_persists() {
+        let dir = std::env::temp_dir().join(format!(
+            "rc-app-lang-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = AppState::for_test(AppSettings::default());
+        s.settings_dir = Some(dir.clone());
+
+        s.set_language(Language::Zh);
+        assert_eq!(
+            s.lang,
+            Lang::Zh,
+            "the render language re-resolves immediately"
+        );
+        let on_disk = crate::settings::load(&dir);
+        assert_eq!(
+            on_disk.settings.language,
+            Language::Zh,
+            "the choice persists"
+        );
+        assert_eq!(on_disk.warning, None);
+
+        s.set_language(Language::En);
+        assert_eq!(s.lang, Lang::En);
+        assert_eq!(crate::settings::load(&dir).settings.language, Language::En);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn section_index_round_trips() {
         for (i, section) in Section::ALL.iter().enumerate() {
             assert_eq!(section.index(), i);
             assert_eq!(Section::from_index(i), *section);
         }
         assert_eq!(Section::from_index(99), Section::Status);
+        // Labels stay in ALL order in both languages, so index-based tab
+        // selection is language-proof.
+        for lang in [Lang::En, Lang::Zh] {
+            let labels = Section::labels(lang);
+            assert_eq!(labels.len(), Section::ALL.len());
+        }
+        assert_eq!(Section::labels(Lang::Zh)[0], "状态");
+        assert_eq!(Section::labels(Lang::En)[0], "Status");
     }
 
     // -- headless renders -----------------------------------------------------
@@ -958,7 +1127,7 @@ mod tests {
             return;
         }
         let mut state = AppState::for_test(AppSettings::default());
-        state.launch_error = Some(StartError::AnotherInstance.message());
+        state.launch_error = Some(StartError::AnotherInstance.message(Lang::En));
         let mut rt = rune::Runtime::new(state, view, (760.0, 680.0), rune::Env::new(true, 1.0));
         rt.frame(0.0);
         assert!(rt.find("error-overlay").is_some(), "the conflict overlay renders");
@@ -982,5 +1151,3 @@ mod tests {
         assert!(rt.find("pressed-ok").is_some(), "the Ok row shows its pressed label");
     }
 }
-
-

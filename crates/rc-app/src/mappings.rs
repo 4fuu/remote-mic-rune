@@ -76,6 +76,8 @@ pub mod vk {
 }
 
 /// The media keys the V1 picker offers (`rc-mapping`'s MediaKey action).
+/// Display labels live at the `tr(` call sites in `ui.rs`/`views.rs`, keyed
+/// by the English wording; this model stays label-free.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MediaKey {
@@ -87,20 +89,6 @@ pub enum MediaKey {
     Next,
 }
 
-impl MediaKey {
-    /// Picker / settings label. `const` so const option lists can call it.
-    pub const fn label(self) -> &'static str {
-        match self {
-            MediaKey::Mute => "Media: Mute",
-            MediaKey::VolumeDown => "Media: Vol -",
-            MediaKey::VolumeUp => "Media: Vol +",
-            MediaKey::PlayPause => "Media: Play",
-            MediaKey::Prev => "Media: Prev",
-            MediaKey::Next => "Media: Next",
-        }
-    }
-}
-
 /// Mouse button for the `MouseClick` action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -108,16 +96,6 @@ pub enum MouseButton {
     Left,
     Right,
     Middle,
-}
-
-impl MouseButton {
-    pub const fn label(self) -> &'static str {
-        match self {
-            MouseButton::Left => "Mouse: Left",
-            MouseButton::Right => "Mouse: Right",
-            MouseButton::Middle => "Mouse: Middle",
-        }
-    }
 }
 
 /// One configured action for a button gesture (rc-mapping's action enum).

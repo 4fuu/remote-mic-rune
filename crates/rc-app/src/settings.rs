@@ -2,6 +2,11 @@
 //! app preferences. Loading is fault-tolerant: a malformed file is backed up
 //! to settings.json.bak and the app starts fresh, never crashing or losing
 //! the broken file for inspection.
+//!
+//! Load/save failures come back as small enums ([`LoadWarning`],
+//! [`BackupFail`], [`SaveError`]) carrying the raw OS error text; the UI
+//! translates them at display time, because loading runs before the UI
+//! language is applied.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use rc_protocol::buttons::VOICE_SYNTHABLE_USAGES;
 
+use crate::i18n::{Lang, Language, tr_fmt};
 use crate::mappings::ButtonMappings;
 
 pub const SETTINGS_FILE: &str = "settings.json";
@@ -26,6 +32,9 @@ pub struct AppSettings {
     /// or None for off. Invalid values load as off.
     pub voice_synth_to: Option<u16>,
     pub window: WindowPrefs,
+    /// UI language (`System` follows the OS). Files saved before this field
+    /// existed load as `System` through the serde default.
+    pub language: Language,
 }
 
 /// Window preferences.
@@ -67,9 +76,92 @@ pub fn app_dir() -> Option<PathBuf> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Loaded {
     pub settings: AppSettings,
-    /// Set when the file was corrupt: it has been moved to settings.json.bak
-    /// and defaults are in effect. Shown once in the UI.
-    pub warning: Option<String>,
+    /// Set when the file needed fixing (corrupt file backed up, invalid
+    /// value turned off). Shown once in the UI, translated at display time.
+    pub warning: Option<LoadWarning>,
+}
+
+/// Why loading had to step in. Translated through
+/// [`LoadWarning::message`] when the UI shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoadWarning {
+    /// The stored voice-synth usage was not in the validated list, so it
+    /// has been turned off.
+    InvalidVoiceSynth,
+    /// The file was malformed: it has been backed up to settings.json.bak
+    /// and defaults are in effect. `err` is the serde error text.
+    CorruptBackedUp { err: String },
+    /// The file was malformed and backing it up failed; defaults are in
+    /// effect and the broken file is still in place.
+    CorruptBackupFailed { err: String, why: BackupFail },
+}
+
+impl LoadWarning {
+    /// The user-facing message in the UI's language. The embedded serde/OS
+    /// error text stays English (it is technical detail, like any OS error).
+    pub fn message(&self, lang: Lang) -> String {
+        match self {
+            LoadWarning::InvalidVoiceSynth => tr_fmt!(
+                lang,
+                "Voice synthesis target in settings.json is not in the validated list; it has been turned off."
+            ),
+            LoadWarning::CorruptBackedUp { err } => tr_fmt!(
+                lang,
+                "settings.json was malformed ({}); it has been backed up to settings.json.bak and defaults are in effect.",
+                err
+            ),
+            LoadWarning::CorruptBackupFailed { err, why } => {
+                let why = why.message(lang);
+                tr_fmt!(lang, "settings.json is malformed ({}) and backing it up failed: {}", err, why)
+            }
+        }
+    }
+}
+
+/// Why backing a corrupt file up failed, translated through
+/// [`BackupFail::message`] when the UI shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BackupFail {
+    ReplaceFailed { path: String, err: String },
+    MoveAsideFailed { err: String },
+}
+
+impl BackupFail {
+    pub fn message(&self, lang: Lang) -> String {
+        match self {
+            BackupFail::ReplaceFailed { path, err } => {
+                tr_fmt!(lang, "cannot replace {}: {}", path, err)
+            }
+            BackupFail::MoveAsideFailed { err } => tr_fmt!(lang, "cannot move it aside: {}", err),
+        }
+    }
+}
+
+/// Why saving failed, translated through [`SaveError::message`] when the UI
+/// shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SaveError {
+    CreateDirFailed { path: String, err: String },
+    SerializeFailed { err: String },
+    WriteFailed { path: String, err: String },
+    ReplaceFailed { path: String, err: String },
+}
+
+impl SaveError {
+    pub fn message(&self, lang: Lang) -> String {
+        match self {
+            SaveError::CreateDirFailed { path, err } => {
+                tr_fmt!(lang, "cannot create {}: {}", path, err)
+            }
+            SaveError::SerializeFailed { err } => {
+                tr_fmt!(lang, "cannot serialize settings: {}", err)
+            }
+            SaveError::WriteFailed { path, err } => tr_fmt!(lang, "cannot write {}: {}", path, err),
+            SaveError::ReplaceFailed { path, err } => {
+                tr_fmt!(lang, "cannot replace {}: {}", path, err)
+            }
+        }
+    }
 }
 
 /// Load settings from `dir`, falling back to defaults. A malformed file is
@@ -88,46 +180,62 @@ pub fn load(dir: &Path) -> Loaded {
             let valid = settings.valid_voice_synth();
             if settings.voice_synth_to != valid {
                 settings.voice_synth_to = valid;
-                warning = Some("Voice synthesis target in settings.json is not in the \
-                                validated list; it has been turned off."
-                    .to_string());
+                warning = Some(LoadWarning::InvalidVoiceSynth);
             }
             Loaded { settings, warning }
         }
         Err(err) => {
-            let moved = backup_corrupt_file(dir, &path);
-            let note = match moved {
-                Ok(()) => format!(
-                    "settings.json was malformed ({err}); it has been backed up to \
-                     {SETTINGS_FILE}{BACKUP_SUFFIX} and defaults are in effect."
-                ),
-                Err(backup_err) => format!(
-                    "settings.json is malformed ({err}) and backing it up failed: {backup_err}"
-                ),
-            };
-            Loaded { settings: AppSettings::default(), warning: Some(note) }
+            let settings = AppSettings::default();
+            match backup_corrupt_file(dir, &path) {
+                Ok(()) => Loaded {
+                    settings,
+                    warning: Some(LoadWarning::CorruptBackedUp {
+                        err: err.to_string(),
+                    }),
+                },
+                Err(why) => Loaded {
+                    settings,
+                    warning: Some(LoadWarning::CorruptBackupFailed {
+                        err: err.to_string(),
+                        why,
+                    }),
+                },
+            }
         }
     }
 }
 
 /// Replace any previous backup, then move the corrupt file aside.
-fn backup_corrupt_file(dir: &Path, path: &Path) -> Result<(), String> {
+fn backup_corrupt_file(dir: &Path, path: &Path) -> Result<(), BackupFail> {
     let backup = backup_path(dir);
     if backup.exists() {
-        fs::remove_file(&backup).map_err(|e| format!("cannot replace {}: {e}", backup.display()))?;
+        fs::remove_file(&backup).map_err(|e| BackupFail::ReplaceFailed {
+            path: backup.display().to_string(),
+            err: e.to_string(),
+        })?;
     }
-    fs::rename(path, &backup).map_err(|e| format!("cannot move it aside: {e}"))
+    fs::rename(path, &backup).map_err(|e| BackupFail::MoveAsideFailed { err: e.to_string() })
 }
 
 /// Write settings atomically enough for a small config: create the directory
 /// if needed, write a temp file, then rename over the target.
-pub fn save(dir: &Path, settings: &AppSettings) -> Result<(), String> {
-    fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-    let json = serde_json::to_string_pretty(settings).map_err(|e| format!("cannot serialize settings: {e}"))?;
+pub fn save(dir: &Path, settings: &AppSettings) -> Result<(), SaveError> {
+    fs::create_dir_all(dir).map_err(|e| SaveError::CreateDirFailed {
+        path: dir.display().to_string(),
+        err: e.to_string(),
+    })?;
+    let json = serde_json::to_string_pretty(settings)
+        .map_err(|e| SaveError::SerializeFailed { err: e.to_string() })?;
     let path = settings_path(dir);
     let tmp = dir.join(format!("{SETTINGS_FILE}.tmp"));
-    fs::write(&tmp, json).map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
-    fs::rename(&tmp, &path).map_err(|e| format!("cannot replace {}: {e}", path.display()))?;
+    fs::write(&tmp, json).map_err(|e| SaveError::WriteFailed {
+        path: tmp.display().to_string(),
+        err: e.to_string(),
+    })?;
+    fs::rename(&tmp, &path).map_err(|e| SaveError::ReplaceFailed {
+        path: path.display().to_string(),
+        err: e.to_string(),
+    })?;
     Ok(())
 }
 
@@ -151,6 +259,7 @@ mod tests {
         settings.capture_enabled = true;
         settings.voice_synth_to = Some(0x00E6);
         settings.window.dark = Some(true);
+        settings.language = Language::Zh;
         settings.mappings.set_slot_action(
             rc_protocol::RemoteButton::Home,
             Slot::Single,
@@ -166,6 +275,30 @@ mod tests {
         let loaded = load(&dir);
         assert_eq!(loaded.settings, sample());
         assert_eq!(loaded.warning, None);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn old_files_without_a_language_field_load_as_system() {
+        let dir = unique_dir("nolang");
+        fs::create_dir_all(&dir).unwrap();
+        // The shape a pre-language build wrote: no `language` key at all.
+        let old = r#"{"capture_enabled": true, "mappings": {"buttons": {}}}"#;
+        fs::write(settings_path(&dir), old).unwrap();
+        let loaded = load(&dir);
+        assert_eq!(
+            loaded.settings.language,
+            Language::System,
+            "serde default applies"
+        );
+        assert_eq!(
+            loaded.settings.capture_enabled, true,
+            "the rest of the file still loads"
+        );
+        assert_eq!(loaded.warning, None);
+        // An explicit language survives the same load.
+        fs::write(settings_path(&dir), r#"{"language": "zh"}"#).unwrap();
+        assert_eq!(load(&dir).settings.language, Language::Zh);
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -186,8 +319,16 @@ mod tests {
 
         let loaded = load(&dir);
         assert_eq!(loaded.settings, AppSettings::default());
-        let warning = loaded.warning.expect("corruption must warn");
-        assert!(warning.contains("backed up"), "warning: {warning}");
+        let Some(LoadWarning::CorruptBackedUp { err }) = &loaded.warning else {
+            panic!("corruption must warn: {:?}", loaded.warning);
+        };
+        let expected_err = serde_json::from_str::<AppSettings>(&broken)
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            *err, expected_err,
+            "the serde error text is carried verbatim"
+        );
 
         let backup = backup_path(&dir);
         assert_eq!(fs::read_to_string(&backup).unwrap(), broken);
@@ -230,11 +371,31 @@ mod tests {
         save(&dir, &settings).unwrap();
         let loaded = load(&dir);
         assert_eq!(loaded.settings.voice_synth_to, None);
-        assert!(loaded.warning.is_some(), "the clamped value is reported");
+        assert_eq!(loaded.warning, Some(LoadWarning::InvalidVoiceSynth));
         // A whitelist target survives the same check.
         let mut ok = AppSettings::default();
         ok.voice_synth_to = Some(0x00E2); // VK_LMENU, in VOICE_SYNTHABLE_USAGES
         assert_eq!(ok.valid_voice_synth(), Some(0x00E2));
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn warning_and_save_errors_translate_per_language() {
+        let warning = LoadWarning::CorruptBackedUp {
+            err: "expected ident".into(),
+        };
+        assert!(warning
+            .message(Lang::En)
+            .starts_with("settings.json was malformed"));
+        assert!(warning
+            .message(Lang::Zh)
+            .starts_with("settings.json 格式错误"));
+        let save_err = SaveError::CreateDirFailed {
+            path: "/x".into(),
+            err: "denied".into(),
+        };
+        assert_eq!(save_err.message(Lang::Zh), "无法创建 /x：denied");
+        let backup_err = BackupFail::MoveAsideFailed { err: "busy".into() };
+        assert_eq!(backup_err.message(Lang::Zh), "无法将其移开：busy");
     }
 }

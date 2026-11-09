@@ -12,22 +12,40 @@
 //! - Unknown tokens, empty tokens and more than one key are errors. The app
 //!   never persists an invalid chord.
 
-use crate::mappings::{VKey, vk};
+use crate::i18n::{tr_fmt, Lang};
+use crate::mappings::{vk, VKey};
 
 /// Longest chord the parser accepts (4 modifiers + 1 key).
 const MAX_TOKENS: usize = 5;
 
-/// Parse a user-typed chord such as `Ctrl+Alt+F5` into its VKeys.
-pub fn parse_chord(text: &str) -> Result<Vec<VKey>, String> {
+/// The `{:?}`-quoted form the error messages show the user's input in
+/// (templates only take plain `{}` placeholders, so quoting happens here).
+fn quoted(text: &str) -> String {
+    format!("{text:?}")
+}
+
+/// Parse a user-typed chord such as `Ctrl+Alt+F5` into its VKeys. The
+/// accepted syntax is fixed (`Ctrl`/`Alt`/`Shift`/`Win` + one key, `+`
+/// separated); only the error messages take the UI's language.
+pub fn parse_chord(lang: Lang, text: &str) -> Result<Vec<VKey>, String> {
     let mut modifiers: Vec<VKey> = Vec::new();
     let mut key: Option<VKey> = None;
 
     let tokens: Vec<&str> = text.split('+').map(str::trim).collect();
     if tokens.iter().any(|t| t.is_empty()) {
-        return Err(format!("{text:?} has an empty key before or after '+'"));
+        return Err(tr_fmt!(
+            lang,
+            "{} has an empty key before or after '+'",
+            quoted(text)
+        ));
     }
     if tokens.len() > MAX_TOKENS {
-        return Err(format!("{text:?} has too many '+' groups (max {MAX_TOKENS})"));
+        return Err(tr_fmt!(
+            lang,
+            "{} has too many '+' groups (max {})",
+            quoted(text),
+            MAX_TOKENS
+        ));
     }
     for token in tokens {
         let lower = token.to_ascii_lowercase();
@@ -48,7 +66,12 @@ pub fn parse_chord(text: &str) -> Result<Vec<VKey>, String> {
         };
         if let Some(m) = modifier {
             if key.is_some() {
-                return Err(format!("{text:?}: modifier {token:?} must come before the key"));
+                return Err(tr_fmt!(
+                    lang,
+                    "{}: modifier {} must come before the key",
+                    quoted(text),
+                    quoted(token)
+                ));
             }
             if !modifiers.contains(&m) {
                 modifiers.push(m);
@@ -56,12 +79,16 @@ pub fn parse_chord(text: &str) -> Result<Vec<VKey>, String> {
             continue;
         }
         if key.is_some() {
-            return Err(format!("{text:?} has more than one non-modifier key"));
+            return Err(tr_fmt!(
+                lang,
+                "{} has more than one non-modifier key",
+                quoted(text)
+            ));
         }
-        key = Some(parse_key(token)?);
+        key = Some(parse_key(lang, token)?);
     }
     let Some(key) = key else {
-        return Err(format!("{text:?} has no key, only modifiers"));
+        return Err(tr_fmt!(lang, "{} has no key, only modifiers", quoted(text)));
     };
 
     // Canonical order: Ctrl, Alt, Shift, Win, key — with the left/right
@@ -98,7 +125,7 @@ pub fn format_chord(chord: &[VKey]) -> String {
 }
 
 /// A single non-modifier key name -> VKey.
-fn parse_key(token: &str) -> Result<VKey, String> {
+fn parse_key(lang: Lang, token: &str) -> Result<VKey, String> {
     let lower = token.to_ascii_lowercase();
     match lower.as_str() {
         "esc" | "escape" => Ok(vk::ESCAPE),
@@ -156,10 +183,14 @@ fn parse_key(token: &str) -> Result<VKey, String> {
                     if (1..=24).contains(&n) {
                         return Ok(VKey(vk::F1.0 + n - 1));
                     }
-                    return Err(format!("{token:?} is out of range (F1-F24)"));
+                    return Err(tr_fmt!(lang, "{} is out of range (F1-F24)", quoted(token)));
                 }
             }
-            Err(format!("{token:?} is not a key this app knows"))
+            Err(tr_fmt!(
+                lang,
+                "{} is not a key this app knows",
+                quoted(token)
+            ))
         }
     }
 }
@@ -239,79 +270,102 @@ fn is_modifier(key: VKey) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::i18n::Lang;
 
     #[test]
     fn plain_key_parses_without_modifiers() {
-        assert_eq!(parse_chord("F5").unwrap(), vec![vk::F5]);
-        assert_eq!(parse_chord("a").unwrap(), vec![VKey(0x41)]);
-        assert_eq!(parse_chord("7").unwrap(), vec![VKey(0x37)]);
+        assert_eq!(parse_chord(Lang::En, "F5").unwrap(), vec![vk::F5]);
+        assert_eq!(parse_chord(Lang::En, "a").unwrap(), vec![VKey(0x41)]);
+        assert_eq!(parse_chord(Lang::En, "7").unwrap(), vec![VKey(0x37)]);
     }
 
     #[test]
     fn modifiers_and_key_parse_in_canonical_order() {
         assert_eq!(
-            parse_chord("Ctrl+Alt+F5").unwrap(),
+            parse_chord(Lang::En, "Ctrl+Alt+F5").unwrap(),
             vec![vk::CONTROL, vk::MENU, vk::F5]
         );
         // Side-specific modifiers parse, label and re-parse (a settings file
         // may carry the physical VK_LCONTROL rather than generic VK_CONTROL).
-        let sided = parse_chord("LCtrl+F5").unwrap();
+        let sided = parse_chord(Lang::En, "LCtrl+F5").unwrap();
         assert_eq!(sided, vec![vk::LCONTROL, vk::F5]);
         assert_eq!(format_chord(&sided), "LCtrl+F5");
-        assert_eq!(parse_chord(&format_chord(&sided)).unwrap(), sided);
+        assert_eq!(parse_chord(Lang::En, &format_chord(&sided)).unwrap(), sided);
         assert_eq!(format_chord(&[vk::RMENU, vk::F5]), "RAlt+F5");
         // Any spelling, any order, same result.
         assert_eq!(
-            parse_chord("alt+CTRL+f5").unwrap(),
-            parse_chord("Ctrl+Alt+F5").unwrap()
+            parse_chord(Lang::En, "alt+CTRL+f5").unwrap(),
+            parse_chord(Lang::En, "Ctrl+Alt+F5").unwrap()
         );
         assert_eq!(
-            parse_chord("Shift+Win+Down").unwrap(),
+            parse_chord(Lang::En, "Shift+Win+Down").unwrap(),
             vec![vk::SHIFT, vk::LWIN, vk::DOWN]
         );
-        assert_eq!(parse_chord("Control+P").unwrap(), vec![vk::CONTROL, VKey(0x50)]);
+        assert_eq!(
+            parse_chord(Lang::En, "Control+P").unwrap(),
+            vec![vk::CONTROL, VKey(0x50)]
+        );
     }
 
     #[test]
     fn duplicate_modifiers_are_deduplicated() {
-        assert_eq!(parse_chord("Ctrl+Ctrl+A").unwrap(), vec![vk::CONTROL, VKey(0x41)]);
+        assert_eq!(
+            parse_chord(Lang::En, "Ctrl+Ctrl+A").unwrap(),
+            vec![vk::CONTROL, VKey(0x41)]
+        );
     }
 
     #[test]
     fn named_and_numpad_keys_parse() {
-        assert_eq!(parse_chord("Esc").unwrap(), vec![vk::ESCAPE]);
-        assert_eq!(parse_chord("Space").unwrap(), vec![vk::SPACE]);
-        assert_eq!(parse_chord("PageUp").unwrap(), vec![vk::PRIOR]);
-        assert_eq!(parse_chord("Num4").unwrap(), vec![VKey(0x64)]);
-        assert_eq!(parse_chord("Ctrl+Num/").unwrap(), vec![vk::CONTROL, vk::DIVIDE]);
+        assert_eq!(parse_chord(Lang::En, "Esc").unwrap(), vec![vk::ESCAPE]);
+        assert_eq!(parse_chord(Lang::En, "Space").unwrap(), vec![vk::SPACE]);
+        assert_eq!(parse_chord(Lang::En, "PageUp").unwrap(), vec![vk::PRIOR]);
+        assert_eq!(parse_chord(Lang::En, "Num4").unwrap(), vec![VKey(0x64)]);
+        assert_eq!(
+            parse_chord(Lang::En, "Ctrl+Num/").unwrap(),
+            vec![vk::CONTROL, vk::DIVIDE]
+        );
     }
 
     #[test]
     fn empty_and_partial_input_is_rejected() {
-        assert!(parse_chord("").is_err());
-        assert!(parse_chord("   ").is_err());
-        assert!(parse_chord("Ctrl+").is_err());
-        assert!(parse_chord("+A").is_err());
-        assert!(parse_chord("Ctrl++A").is_err());
+        assert!(parse_chord(Lang::En, "").is_err());
+        assert!(parse_chord(Lang::En, "   ").is_err());
+        assert!(parse_chord(Lang::En, "Ctrl+").is_err());
+        assert!(parse_chord(Lang::En, "+A").is_err());
+        assert!(parse_chord(Lang::En, "Ctrl++A").is_err());
     }
 
     #[test]
     fn unknown_keys_are_rejected() {
-        assert!(parse_chord("Bogus").is_err());
-        assert!(parse_chord("Ctrl+Bogus").is_err());
-        assert!(parse_chord("F25").is_err());
-        assert!(parse_chord("Ctrl+Shift").is_err(), "modifiers alone are not a chord");
+        assert!(parse_chord(Lang::En, "Bogus").is_err());
+        assert!(parse_chord(Lang::En, "Ctrl+Bogus").is_err());
+        assert!(parse_chord(Lang::En, "F25").is_err());
+        assert!(
+            parse_chord(Lang::En, "Ctrl+Shift").is_err(),
+            "modifiers alone are not a chord"
+        );
     }
 
     #[test]
     fn a_key_after_a_modifier_key_is_rejected() {
-        assert!(parse_chord("Ctrl+F1+Alt").is_err());
+        assert!(parse_chord(Lang::En, "Ctrl+F1+Alt").is_err());
     }
 
     #[test]
     fn format_round_trips_canonical_chords() {
-        for text in ["Ctrl+Alt+F5", "Shift+Down", "Ctrl+Shift+Esc", "Win+Num4", "F12"] {
-            assert_eq!(format_chord(&parse_chord(text).unwrap()), text, "round trip {text}");
+        for text in [
+            "Ctrl+Alt+F5",
+            "Shift+Down",
+            "Ctrl+Shift+Esc",
+            "Win+Num4",
+            "F12",
+        ] {
+            assert_eq!(
+                format_chord(&parse_chord(Lang::En, text).unwrap()),
+                text,
+                "round trip {text}"
+            );
         }
     }
 
