@@ -4,10 +4,15 @@
 //! Everything before `app.run()` is plain host code; the UI logic lives in
 //! `ui.rs` and the seam in `bridge_api.rs`.
 
+// The app is a windowed program: without this Windows allocates a console for
+// it, so launching from Explorer leaves a command-prompt window behind.
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 mod bridge_api;
 mod chord;
 mod engine;
 mod i18n;
+mod icon;
 mod mappings;
 mod real;
 mod remote_photo;
@@ -72,7 +77,12 @@ fn main() {
         lang,
     };
 
-    // 3. The Rune app and its handle (background threads talk to the UI
+    // 3. The window/taskbar icon, applied to the window Rune opens next; the
+    //    tray uses the same PNG through `icon::tray_rgba`, and the exe embeds
+    //    the matching ICO from `build.rs`.
+    icon::install();
+
+    // 4. The Rune app and its handle (background threads talk to the UI
     //    only through it). The titlebar height must match the band the view
     //    draws (`views::TITLEBAR_HEIGHT`): Rune takes the native Windows
     //    title bar away and draws its caption buttons over that band.
@@ -97,7 +107,7 @@ fn main() {
         ui: Some(handle.clone()),
     });
 
-    // 4. Engine pump: bridge events -> engine, 25 ms ticks, status -> UI.
+    // 5. Engine pump: bridge events -> engine, 25 ms ticks, status -> UI.
     if let (Some(bridge), Some(engine)) = (bridge, engine) {
         let pump = engine::spawn_pump(
             engine_rx,
@@ -120,7 +130,7 @@ fn main() {
         });
     }
 
-    // 5. Tray icon (best effort; unsupported platforms just skip it).
+    // 6. Tray icon (best effort; unsupported platforms just skip it).
     tray::spawn(handle, lang);
 
     app.run();

@@ -10,6 +10,10 @@ description = "Desktop application shell for remote-mic-rune (Rune UI): status, 
 name = "rc-app"
 path = "src/main.rs"
 
+[build-dependencies]
+# Windows executable icon/metadata resource; a no-op build step elsewhere.
+winresource = "0.1.34"
+
 [dependencies]
 rc-protocol = { path = "../rc-protocol" }
 rc-bridge = { path = "../rc-bridge" }
