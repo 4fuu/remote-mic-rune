@@ -94,6 +94,18 @@ Notes:
 
 ## Native Windows build
 
+Prerequisites beyond the Rust toolchain:
+
+- **Visual Studio Build Tools** with the C++ workload (`cl.exe`, `lib.exe`) —
+  required by the `frida-gum-sys` build script.
+- **LLVM / libclang** for `bindgen`. Install LLVM from
+  <https://releases.llvm.org/>; the installer normally adds
+  `C:\Program Files\LLVM\bin` to `PATH`. If `cargo build` reports
+  `Unable to find libclang`, set `LIBCLANG_PATH` to that `bin` directory.
+- Network access on the first build: `frida-gum-sys` downloads the pinned
+  Frida Gum devkit (17.9.5, x86_64) from GitHub and caches it under the
+  target directory.
+
 ```powershell
 rustup default stable-x86_64-pc-windows-msvc
 cargo build --release
@@ -102,7 +114,8 @@ cargo build --release
 Produces `rc-helper.exe`, `rc-app.exe`, and `rc_agent.dll` under
 `target/x86_64-pc-windows-msvc/release/` (or `target/release/`). This is
 the production toolchain and the only one whose `rc_agent.dll` contains
-the Frida Gum hook (enhanced capture).
+the Frida Gum hook (enhanced capture). Expect a longer first build and a
+larger `rc_agent.dll` than the GNU stub, because Gum is linked in.
 
 ## Deployment layout
 
