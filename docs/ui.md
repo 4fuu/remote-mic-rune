@@ -4,14 +4,23 @@ The app window (`rc-app.exe`, built on the Rune GPU-rendered UI framework)
 is a SwiftUI-style **inset-grouped form**: uppercase section headers above
 inset cards, footnote captions below them, and one centered segmented
 control for navigation. Light and dark appearances follow the system (or the
-Settings override), with a system-blue tint approximated in oklch.
+Settings override), with a system-blue tint approximated in oklch. The UI is
+bilingual: English source strings with a complete Simplified Chinese
+catalog, following the OS UI language by default (see
+[`i18n.rs`](../crates/rc-app/src/i18n.rs)).
 
 ## Window anatomy
 
-- **Navigation bar** — the app title with its version, a trailing badge for
-  the bridge phase (`Connected`, `Listening`, …), and a callout strip for
-  settings warnings when one exists.
-- **Section tabs** — a centered `SegmentedControl` with the five sections:
+- **Title bar band** — the app draws its own 46 pt title bar
+  (`App::titlebar`): app title, version, and the bridge-phase badge
+  (`Connected`, `Listening`, …), plus a callout strip for settings warnings
+  when one exists. On Windows Rune removes the native title bar and draws
+  the minimize / maximize / close buttons over the band's trailing edge
+  (snap layouts included); on Linux the native frame stays and the band
+  reads as a toolbar. The band is a `.window_drag()` region: drag to move,
+  double-click to maximize/restore, right-click for the window menu.
+- **Section tabs** — a centered `SegmentedControl` with the five sections
+  (English labels shown here; the UI renders them in the active language):
   **Status · Capture · Buttons · Helper · Settings**.
 
 ## Sections and their controls
@@ -84,13 +93,19 @@ One card for the scheduled task that grants elevation:
 ### Settings
 
 - **Appearance** segmented control: Auto / Light / Dark.
+- **Language** segmented control: System / English / 简体中文. System follows
+  the OS UI language (Windows `GetUserDefaultUILanguage`, otherwise
+  `LC_ALL`/`LANG`); the choice persists in `settings.json` and applies
+  without a restart. A file saved before the field existed loads as System.
 - **Storage** card: the resolved `settings.json` path, **Save now** and
   **Reload from disk** buttons. Loading is fault-tolerant: a malformed file
-  is backed up to `settings.json.bak` and the app starts fresh.
+  is backed up to `settings.json.bak` and the app starts fresh; load/save
+  warnings are translated at display time.
 
 ## Testing the UI
 
 State changes funnel through `AppState` methods, so the form logic is
 testable headlessly (no GPU). Rendering tests exist separately and run under
-`RC_APP_UI_TESTS=1` with snapshot output to `RC_APP_SNAP_DIR`; see
-[building.md](building.md).
+`RC_APP_UI_TESTS=1` with snapshot output to `RC_APP_SNAP_DIR`; set
+`RC_APP_SNAP_LANG=zh` or `RC_APP_SNAP_LANG=en` to pin the snapshot language
+(the snapshot suite defaults to Chinese). See [building.md](building.md).
