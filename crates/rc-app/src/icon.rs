@@ -1,10 +1,10 @@
 //! One icon for every surface: the window/taskbar, the tray, and the Windows
 //! executable resource.
 //!
-//! `assets/app-icon.svg` is the source of truth; `app-icon.png` (1024 px) is
-//! embedded here for Rune and decoded for the tray, and `app-icon.ico`
-//! (16–256 px) is compiled into `rc-app.exe` by `build.rs`. Keeping all
-//! three generated from one SVG is what makes the icon the same everywhere.
+//! `assets/app-icon.png` (1024 px) is the master artwork, embedded here for
+//! Rune and decoded for the tray. `app-icon.ico` (16–256 px) is generated
+//! from it and compiled into `rc-app.exe` by `build.rs`, so every surface
+//! shows the same remote.
 
 /// The 1024 px master PNG. `build.rs` embeds the ICO; Rune takes the PNG.
 pub const PNG: &[u8] = include_bytes!("../assets/app-icon.png");

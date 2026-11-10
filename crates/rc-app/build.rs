@@ -2,7 +2,7 @@
 //! shortcuts and the taskbar show the same artwork as the window and tray.
 //!
 //! Runs only when the *target* is Windows: host tests on Linux skip it. The
-//! icon itself comes from `assets/app-icon.svg` (see `src/icon.rs`).
+//! ICO is generated from the master `assets/app-icon.png` (see `src/icon.rs`).
 
 fn main() {
     println!("cargo:rerun-if-changed=assets/app-icon.ico");
