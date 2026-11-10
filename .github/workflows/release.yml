@@ -1,0 +1,192 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out source and tags
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Validate release version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == "refs/heads/main" ]] || {
+            echo "Run releases from main, not $GITHUB_REF" >&2
+            exit 1
+          }
+          mapfile -t versions < <(
+            cargo metadata --locked --no-deps --format-version 1 |
+              jq -r '.packages[] | select(.name == "rc-app") | .version'
+          )
+          [[ ${#versions[@]} -eq 1 ]] || {
+            echo "expected exactly one rc-app package" >&2
+            exit 1
+          }
+          VERSION=${versions[0]}
+          [[ "$VERSION" =~ ^[0-9]{4}\.[0-9]{3,4}\.[0-9]+$ ]] || {
+            echo "Version must use YYYY.MDD.REVISION" >&2
+            exit 1
+          }
+          EXPECTED_PREFIX=$(TZ=Asia/Hong_Kong date '+%Y.%-m%d')
+          [[ "$VERSION" == "$EXPECTED_PREFIX".* ]] || {
+            echo "Version $VERSION does not match today's Asia/Hong_Kong date $EXPECTED_PREFIX" >&2
+            exit 1
+          }
+          if tag_sha=$(git rev-list -n 1 "v$VERSION" 2>/dev/null); then
+            [[ "$tag_sha" == "$GITHUB_SHA" ]] || {
+              echo "Tag v$VERSION points to $tag_sha instead of $GITHUB_SHA" >&2
+              exit 1
+            }
+            echo "Resuming release v$VERSION"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+  verify:
+    needs: validate
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: checks
+      - name: Install Linux UI test libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev
+      - name: Run the test suite
+        run: cargo test --locked
+
+  build:
+    needs: validate
+    runs-on: windows-2025
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release
+          key: ${{ runner.os }}-msvc
+      - name: Ensure libclang for bindgen
+        shell: pwsh
+        run: |
+          $llvm = "C:\Program Files\LLVM\bin"
+          if (-not (Test-Path (Join-Path $llvm "libclang.dll"))) {
+            Write-Host "libclang not found; installing LLVM via Chocolatey"
+            choco install llvm --no-progress -y
+          }
+          if (-not (Test-Path (Join-Path $llvm "libclang.dll"))) {
+            throw "libclang.dll not found at $llvm"
+          }
+          "LIBCLANG_PATH=$llvm" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "LIBCLANG_PATH=$llvm"
+      - name: Build the Windows release
+        shell: pwsh
+        run: cargo build --locked --release --target x86_64-pc-windows-msvc
+      - name: Stage and package
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP "stage"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          $release = "target/x86_64-pc-windows-msvc/release"
+          foreach ($file in @("rc-app.exe", "rc-helper.exe", "rc_agent.dll")) {
+            Copy-Item (Join-Path $release $file) $stage
+          }
+          foreach ($file in @("README.md", "LICENSE", "THIRD-PARTY-NOTICES.md")) {
+            Copy-Item $file $stage
+          }
+          $zip = "remote-mic-rune-$env:VERSION-x86_64-pc-windows-msvc.zip"
+          Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $zip
+          Get-ChildItem $stage | Select-Object Name, Length
+      - name: Upload the Windows archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64
+          path: remote-mic-rune-${{ needs.validate.outputs.version }}-x86_64-pc-windows-msvc.zip
+          if-no-files-found: error
+
+  release:
+    needs: [validate, verify, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - name: Check out source and tags
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Download release archive
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-x86_64
+          path: release
+      - name: Verify main and write checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --tags origin main
+          actual_sha=$(git rev-parse origin/main)
+          [[ "$actual_sha" == "$GITHUB_SHA" ]] || {
+            echo "main moved from $GITHUB_SHA to $actual_sha during the release" >&2
+            exit 1
+          }
+          (cd release && sha256sum remote-mic-rune-* > SHA256SUMS)
+          cat release/SHA256SUMS
+      - name: Create or resume the GitHub release
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="v$VERSION"
+          NOTES="docs/releases/$TAG.md"
+          notes_args=(--generate-notes)
+          if [[ -f "$NOTES" ]]; then
+            notes_args=(--notes-file "$NOTES")
+          fi
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" release/* --clobber --repo "$GITHUB_REPOSITORY"
+          elif git rev-parse --verify --quiet "refs/tags/$TAG"; then
+            gh release create "$TAG" release/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --title "Remote Mic Rune $VERSION" \
+              "${notes_args[@]}"
+          else
+            gh release create "$TAG" release/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "Remote Mic Rune $VERSION" \
+              "${notes_args[@]}"
+          fi
