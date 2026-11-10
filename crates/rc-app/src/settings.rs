@@ -242,7 +242,7 @@ pub fn save(dir: &Path, settings: &AppSettings) -> Result<(), SaveError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mappings::{ButtonAction, MediaKey};
+    use crate::mappings::{vk, ButtonAction, MediaKey, VKey};
 
     fn unique_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir()
@@ -274,6 +274,41 @@ mod tests {
         let loaded = load(&dir);
         assert_eq!(loaded.settings, sample());
         assert_eq!(loaded.warning, None);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn legacy_gesture_columns_load_without_a_warning() {
+        let dir = unique_dir("legacygestures");
+        fs::create_dir_all(&dir).unwrap();
+        let old = r#"{
+            "capture_enabled": true,
+            "mappings": {
+                "buttons": {
+                    "home": {
+                        "single": {"type": "shortcut", "chord": [17, 116]},
+                        "double": {"type": "media_key", "key": "mute"},
+                        "long": {"type": "disabled"},
+                        "hold_repeat": null
+                    }
+                }
+            }
+        }"#;
+        fs::write(settings_path(&dir), old).unwrap();
+        let loaded = load(&dir);
+        assert_eq!(loaded.warning, None);
+        assert_eq!(
+            loaded.settings.mappings.action_for(rc_protocol::RemoteButton::Home),
+            Some(&ButtonAction::Shortcut {
+                chord: vec![vk::CONTROL, vk::F5]
+            })
+        );
+        // The removed columns are gone the next time the file is written.
+        save(&dir, &loaded.settings).unwrap();
+        let saved = fs::read_to_string(settings_path(&dir)).unwrap();
+        assert!(!saved.contains("\"double\""));
+        assert!(!saved.contains("\"long\""));
+        assert!(!saved.contains("\"hold_repeat\""));
         fs::remove_dir_all(&dir).ok();
     }
 
