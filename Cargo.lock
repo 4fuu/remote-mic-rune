@@ -2947,7 +2947,7 @@ dependencies = [
 
 [[package]]
 name = "rc-agent"
-version = "2026.1110.0"
+version = "2026.1110.1"
 dependencies = [
  "frida-gum",
  "rc-protocol",
@@ -2958,7 +2958,7 @@ dependencies = [
 
 [[package]]
 name = "rc-app"
-version = "2026.1110.0"
+version = "2026.1110.1"
 dependencies = [
  "image",
  "rc-bridge",
@@ -2973,7 +2973,7 @@ dependencies = [
 
 [[package]]
 name = "rc-bridge"
-version = "2026.1110.0"
+version = "2026.1110.1"
 dependencies = [
  "rc-protocol",
  "serde",
@@ -2983,7 +2983,7 @@ dependencies = [
 
 [[package]]
 name = "rc-helper"
-version = "2026.1110.0"
+version = "2026.1110.1"
 dependencies = [
  "rc-protocol",
  "serde",
@@ -2993,7 +2993,7 @@ dependencies = [
 
 [[package]]
 name = "rc-mapping"
-version = "2026.1110.0"
+version = "2026.1110.1"
 dependencies = [
  "rc-protocol",
  "serde",
@@ -3003,7 +3003,7 @@ dependencies = [
 
 [[package]]
 name = "rc-protocol"
-version = "2026.1110.0"
+version = "2026.1110.1"
 dependencies = [
  "serde",
  "serde_json",

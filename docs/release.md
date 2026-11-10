@@ -52,17 +52,36 @@ It performs these jobs in order:
    `cargo test --locked` on Ubuntu.
 3. **build** — builds on `windows-2025` with the MSVC toolchain, locating
    LLVM/libclang for `bindgen` (installing LLVM if the runner lacks it),
-   downloading the pinned Frida Gum devkit on first use, and packaging
-   `rc-app.exe`, `rc-helper.exe`, `rc_agent.dll`, `README.md`, `LICENSE`, and
-   `THIRD-PARTY-NOTICES.md` as
-   `remote-mic-rune-<version>-x86_64-pc-windows-msvc.zip`.
+   downloading the pinned Frida Gum devkit on first use, and producing two
+   packages from the same staged files:
+   - `remote-mic-rune-<version>-x86_64-pc-windows-msvc.zip` — portable copy
+     with `rc-app.exe`, `rc-helper.exe`, `rc_agent.dll`, `README.md`,
+     `LICENSE`, and `THIRD-PARTY-NOTICES.md`;
+   - `remote-mic-rune-<version>-x86_64-pc-windows-msvc-setup.exe` — the
+     Inno Setup installer built from `installer/remote-mic-rune.iss`.
 4. **release** — aborts if `main` moved during the run, writes
-   `SHA256SUMS`, and creates the GitHub release `v<version>` with the zip and
-   checksums. If the release already exists, it uploads the assets again with
-   `--clobber`, which makes a failed release resumable.
+   `SHA256SUMS`, and creates the GitHub release `v<version>` with the zip,
+   installer, and checksums. If the release already exists, it uploads the
+   assets again with `--clobber`, which makes a failed release resumable.
 
 The workflow does not publish crates or commit package-manager metadata; the
-Windows zip is the supported distribution unit.
+zip and installer are the supported distribution units.
+
+## Installer
+
+The installer is per-machine: it installs under
+`{autopf}\Remote Mic Rune` (Program Files) so the session-0 `WUDFHost` token
+can read `rc_agent.dll`, creates Start Menu and optional desktop shortcuts,
+and registers an uninstaller. It stops a running helper task before replacing
+files and removes the task on uninstall. The helper task itself is still
+registered from the app's **Helper** tab (one UAC), because that registration
+must point at the installed `rc-helper.exe`.
+
+The installer is built with Inno Setup 6. A local build needs `ISCC.exe`; the
+release workflow uses the runner's Inno Setup or installs it with Chocolatey.
+`installer/remote-mic-rune.iss` is the source of truth and reads the staged
+files from `staging/` (gitignored) and the version from `/DVersion=`.
+Both the installer and the binaries are unsigned; SmartScreen may warn.
 
 ## Build prerequisites (same as a local release build)
 

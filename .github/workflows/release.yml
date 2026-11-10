@@ -116,7 +116,8 @@ jobs:
       - name: Stage and package
         shell: pwsh
         run: |
-          $stage = Join-Path $env:RUNNER_TEMP "stage"
+          $stage = "staging"
+          if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           $release = "target/x86_64-pc-windows-msvc/release"
           foreach ($file in @("rc-app.exe", "rc-helper.exe", "rc_agent.dll")) {
@@ -127,12 +128,26 @@ jobs:
           }
           $zip = "remote-mic-rune-$env:VERSION-x86_64-pc-windows-msvc.zip"
           Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $zip
+
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --no-progress -y
+            $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          }
+          if (-not (Test-Path $iscc)) { throw "Inno Setup ISCC.exe not found" }
+          & $iscc "/DVersion=$env:VERSION" "installer\remote-mic-rune.iss"
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed with exit code $LASTEXITCODE" }
+          $setup = "remote-mic-rune-$env:VERSION-x86_64-pc-windows-msvc-setup.exe"
+          if (-not (Test-Path $setup)) { throw "installer was not produced" }
           Get-ChildItem $stage | Select-Object Name, Length
-      - name: Upload the Windows archive
+          Get-Item $zip, $setup | Select-Object Name, Length
+      - name: Upload the Windows archive and installer
         uses: actions/upload-artifact@v4
         with:
           name: windows-x86_64
-          path: remote-mic-rune-${{ needs.validate.outputs.version }}-x86_64-pc-windows-msvc.zip
+          path: |
+            remote-mic-rune-${{ needs.validate.outputs.version }}-x86_64-pc-windows-msvc.zip
+            remote-mic-rune-${{ needs.validate.outputs.version }}-x86_64-pc-windows-msvc-setup.exe
           if-no-files-found: error
 
   release:
