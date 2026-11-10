@@ -1,5 +1,5 @@
 //! The integration seam between rc-app and the sibling crates `rc-bridge`
-//! (bridge/pipe server) and `rc-mapping` (gesture engine + injector).
+//! (bridge/pipe server) and `rc-mapping` (mapping engine + injector).
 //!
 //! The sibling crates are written in parallel threads, so rc-app codes against
 //! their documented API shapes through the two traits below. Today
@@ -138,13 +138,10 @@ pub trait BridgeHandle: Send + Sync + 'static {
     fn stop(&self);
 }
 
-/// What rc-app needs from the gesture engine (rc-mapping's `MappingEngine`).
+/// What rc-app needs from the mapping engine (rc-mapping's `MappingEngine`).
 pub trait MappingEngineHandle: Send + Sync + 'static {
-    /// Feed one bridge event (button edge or release-all) into the recognizer.
+    /// Feed one bridge event (button edge or release-all) into the engine.
     fn handle(&self, event: EngineEvent);
-    /// Advance gesture timers (double-click windows, long-press, repeat).
-    /// The pump calls this every [`crate::engine::TICK_MS`].
-    fn tick(&self, now_ms: u64);
     /// Swap in a new mapping table (capturing recompute is separate, via the
     /// bridge handle).
     fn replace_mappings(&self, mappings: &ButtonMappings);

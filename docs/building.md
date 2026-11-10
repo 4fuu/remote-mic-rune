@@ -14,8 +14,8 @@ cargo test
 
 Runs every host-runnable test across all crates: protocol parsing, the
 agent's decision layer (gates, lease, synthesis frames), the bridge state
-machine, the gesture engine, mapping persistence, and the app's headless UI
-state logic. This is the fast, complete regression net; everything here
+machine, the mapping engine, mapping persistence, and the app's headless
+UI state logic. This is the fast, complete regression net; everything here
 also runs on Linux/macOS.
 
 ## Rendering tests (GPU required)

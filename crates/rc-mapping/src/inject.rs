@@ -1,4 +1,4 @@
-//! Injection backend: turn fired gestures into synthetic input.
+//! Injection backend: turn a button action into synthetic input.
 //!
 //! The [`KeyInjector`] trait is the seam between the pure engine and the OS.
 //! The production impl (Windows only) drives `SendInput`; tests use the

@@ -25,7 +25,7 @@ RC003 (BLE HID) ──► WUDFHost.exe ──► kbdhid ──► Windows input
                    rc-bridge (pipe server, token auth, per-generation
                               key ownership, watchdogs)
                         │
-                   rc-mapping (single/double/long gestures → SendInput)
+                   rc-mapping (button action → SendInput)
 ```
 
 1. The RC003 pairs as a BLE keyboard. Windows routes its HID reports through
@@ -63,9 +63,9 @@ RC003 (BLE HID) ──► WUDFHost.exe ──► kbdhid ──► Windows input
 
 5. The app (`rc-app.exe`) hosts the bridge: a named-pipe server the helper
    connects to, token-authenticated, with per-generation key ownership and
-   watchdogs. Every edge the bridge produces goes into the mapping engine,
-   which recognizes single/double/long gestures per button and replays them
-   with `SendInput` — chords, media keys, mouse clicks.
+   watchdogs. Every press edge the bridge produces goes into the mapping
+   engine, which fires that button's one configured action with `SendInput`
+   — chords, media keys, mouse clicks.
 
 ## Process and component boundaries
 
@@ -75,7 +75,7 @@ Three OS processes, each with a strict role:
 | ------- | -------- | -------- | -------------- |
 | `WUDFHost.exe` (the RC003's host) | system | `rc_agent.dll` (injected) | Modifies HID reports at the syscall boundary; acts only while its lease lives. |
 | `rc-helper.exe` | yes (scheduled task, RunLevel Highest) | locate + inject + lease + relay + recovery | The only component that writes into another process; refuses shared/ambiguous hosts. |
-| `rc-app.exe` | no | Rune UI, bridge server, gesture engine, SendInput | The only component that talks to the desktop; everything user-visible happens here. |
+| `rc-app.exe` | no | Rune UI, bridge server, mapping engine, SendInput | The only component that talks to the desktop; everything user-visible happens here. |
 
 Pure logic is kept out of the Windows-only processes on purpose: `rc-agent`'s
 decision layer (`report`, `state`, `clock`) and `rc-bridge`'s state machine
@@ -114,7 +114,7 @@ DACL, is the access control.
 | `crates/rc-agent` | cdylib (+rlib for tests) | The injected agent: IOCTL hook, report patch planning, lease state machine, voice-key synthesis. Windows-only glue is cfg-gated; the decision layer is pure. |
 | `crates/rc-helper` | bin | Registry scan and exclusive-host verdict, DLL injection, lease renewal, agent↔app relay, scheduled task management, device-node recovery, CLI for staged verification. |
 | `crates/rc-bridge` | lib | App-side link endpoint: pipe server, token auth, per-generation ownership, watchdogs, snapshot for the UI. |
-| `crates/rc-mapping` | lib | Per-button gesture state machine, action model (shortcuts/media/mouse), SendInput injector. |
+| `crates/rc-mapping` | lib | Per-button action model (shortcuts/media/mouse), SendInput injector. |
 | `crates/rc-app` | bin | Rune UI shell: five sections (Status/Capture/Buttons/Helper/Settings), settings persistence, engine pump, tray. |
 
 Dependency direction is strict: `rc-protocol` depends on nothing internal;

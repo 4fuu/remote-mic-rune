@@ -8,11 +8,12 @@
 //!   [`EngineEvent`](crate::bridge_api::EngineEvent). A forwarder thread
 //!   converts between the two (both carry `rc_protocol::RemoteButton`, so it
 //!   is a pure variant remap).
-//! - **Mappings**: the app's UI model ([`crate::mappings`]) predates seeing
-//!   the real crate and differs in a few serde shapes (`Option` slots vs
-//!   `Disabled`, `dx/dy` vs `dir/px`, `delta` vs `dir/lines`), so conversion
-//!   is hand-written and unit-tested instead of a serde round-trip. The UI
-//!   keeps editing its own model; the engine sees `rc_mapping` types.
+//! - **Mappings**: the app's UI model ([`crate::mappings`]) uses `Option`
+//!   actions while the engine uses `Disabled`, and stores pointer moves as
+//!   `dx/dy` / scrolls as `delta` rather than `dir/px` / `dir/lines`, so
+//!   conversion is hand-written and unit-tested instead of a serde
+//!   round-trip. The UI keeps editing its own model; the engine sees
+//!   `rc_mapping` types.
 //! - **Ownership startup**: `RcBridge::start` never fails — pipe creation
 //!   happens on a worker and surfaces as `snapshot().already_running`; this
 //!   module polls briefly and maps it to
@@ -140,12 +141,6 @@ impl MappingEngineHandle for RealEngine {
         }
     }
 
-    fn tick(&self, _now_ms: u64) {
-        if let Ok(mut engine) = self.inner.lock() {
-            engine.tick(Instant::now());
-        }
-    }
-
     fn replace_mappings(&self, mappings: &mappings::ButtonMappings) {
         let converted = convert_mappings(mappings);
         if let Ok(mut engine) = self.inner.lock() {
@@ -212,24 +207,12 @@ fn convert_action(action: &mappings::ButtonAction) -> map_actions::ButtonAction 
 }
 
 fn convert_actions(actions: &mappings::ButtonActions) -> map_actions::ButtonActions {
-    let conv = |slot: &Option<mappings::ButtonAction>| {
-        slot.as_ref().map(convert_action).unwrap_or(map_actions::ButtonAction::Disabled)
-    };
-    // The app model stores "which action repeats"; the engine model stores
-    // "which column repeats". Repeat targets the single column when it is
-    // configured, otherwise the long column.
-    let repeat_column = actions.hold_repeat.as_ref().map(|_| {
-        if actions.single.is_some() {
-            map_actions::ButtonTrigger::Single
-        } else {
-            map_actions::ButtonTrigger::Long
-        }
-    });
     map_actions::ButtonActions {
-        single: conv(&actions.single),
-        double: conv(&actions.double),
-        long: conv(&actions.long),
-        hold_repeat: repeat_column,
+        single: actions
+            .single
+            .as_ref()
+            .map(convert_action)
+            .unwrap_or(map_actions::ButtonAction::Disabled),
     }
 }
 
@@ -245,7 +228,7 @@ fn convert_mappings(mappings: &mappings::ButtonMappings) -> map_actions::ButtonM
         }
     }
     // Capture gating is the app's toggle (set_capture_targets); the engine
-    // itself stays enabled so configured gestures fire whenever edges arrive.
+    // itself stays enabled so configured actions fire whenever edges arrive.
     map_actions::ButtonMappings { enabled: true, buttons }
 }
 
@@ -292,21 +275,15 @@ mod tests {
         mappings.buttons.insert(
             "back".into(),
             mappings::ButtonActions {
-                single: Some(mappings::ButtonAction::MediaKey { key: mappings::MediaKey::VolumeUp }),
-                double: Some(mappings::ButtonAction::Shortcut {
-                    chord: vec![mappings::vk::LCONTROL, mappings::vk::F5],
+                single: Some(mappings::ButtonAction::MediaKey {
+                    key: mappings::MediaKey::VolumeUp,
                 }),
-                long: Some(mappings::ButtonAction::MouseClick { button: mappings::MouseButton::Right }),
-                hold_repeat: Some(mappings::ButtonAction::Disabled),
             },
         );
         mappings.buttons.insert(
             "up".into(),
             mappings::ButtonActions {
                 single: Some(mappings::ButtonAction::MouseMove { dx: 0, dy: -40 }),
-                double: Some(mappings::ButtonAction::Scroll { delta: 3 }),
-                long: None,
-                hold_repeat: None,
             },
         );
         let converted = convert_mappings(&mappings);
@@ -315,31 +292,12 @@ mod tests {
             back.single,
             map_actions::ButtonAction::MediaKey { key: map_actions::MediaKey::VolumeUp }
         ));
-        assert!(matches!(
-            back.double,
-            map_actions::ButtonAction::Shortcut { ref chord } if chord == &vec![
-                map_actions::VKey(0xA2),
-                map_actions::VKey(0x74)
-            ]
-        ));
-        assert!(matches!(
-            back.long,
-            map_actions::ButtonAction::MouseClick { button: map_actions::MouseClickButton::Right }
-        ));
-        // hold_repeat set + single configured -> repeats the single column.
-        assert_eq!(back.hold_repeat, Some(map_actions::ButtonTrigger::Single));
 
         let up = converted.actions(RemoteButton::Up);
         assert!(matches!(
             up.single,
             map_actions::ButtonAction::MouseMove { dir: map_actions::MoveDirection::Up, px: 40 }
         ));
-        assert!(matches!(
-            up.double,
-            map_actions::ButtonAction::Scroll { dir: map_actions::ScrollDirection::Up, lines: 3 }
-        ));
-        assert!(matches!(up.long, map_actions::ButtonAction::Disabled));
-        assert_eq!(up.hold_repeat, None);
         assert!(converted.enabled);
     }
 

@@ -1,6 +1,6 @@
 //! The engine pump: one thread that owns the bridge's event channel, feeds
-//! every event into the mapping engine, ticks the engine's gesture timers
-//! every 25 ms, and forwards snapshots and pressed-state changes to the UI.
+//! every event into the mapping engine, forwards snapshots and pressed-state
+//! changes to the UI, and drains the channel on a short cadence.
 //!
 //! The loop's decisions are factored into pure helpers ([`apply_edge`],
 //! [`due`]) so they are host-testable without a thread.
@@ -16,8 +16,8 @@ use rc_protocol::ALL_BUTTONS;
 use crate::bridge_api::{EngineEvent, SharedBridge, SharedEngine, UiNotice};
 use crate::mappings::ButtonMappings;
 
-/// Gesture timer resolution: the engine tick period.
-pub const TICK_MS: u64 = 25;
+/// How long one pump iteration drains bridge events before checking status.
+pub const POLL_MS: u64 = 25;
 
 /// How often the pump samples the bridge snapshot for the status screen.
 pub const STATUS_PERIOD_MS: u64 = 500;
@@ -25,14 +25,14 @@ pub const STATUS_PERIOD_MS: u64 = 500;
 /// Loop timings, injectable so tests run fast.
 #[derive(Debug, Clone, Copy)]
 pub struct PumpTimings {
-    pub tick: Duration,
+    pub poll: Duration,
     pub status_period: Duration,
 }
 
 impl Default for PumpTimings {
     fn default() -> Self {
         PumpTimings {
-            tick: Duration::from_millis(TICK_MS),
+            poll: Duration::from_millis(POLL_MS),
             status_period: Duration::from_millis(STATUS_PERIOD_MS),
         }
     }
@@ -84,7 +84,6 @@ pub fn pump_loop(
     bridge.set_voice_synth(init.voice_synth_to);
     on_notice(UiNotice::Status(bridge.snapshot()));
 
-    let started = Instant::now();
     let mut pressed: u64 = 0;
     let mut last_status = Instant::now();
 
@@ -92,8 +91,8 @@ pub fn pump_loop(
         if stop.load(Ordering::Relaxed) {
             break;
         }
-        // Drain the channel into the engine for up to one tick.
-        let deadline = Instant::now() + timings.tick;
+        // Drain the channel into the engine for up to one poll period.
+        let deadline = Instant::now() + timings.poll;
         let mut edges = 0usize;
         loop {
             let now = Instant::now();
@@ -117,7 +116,6 @@ pub fn pump_loop(
                 }
             }
         }
-        engine.tick(started.elapsed().as_millis() as u64);
         if edges > 0 {
             on_notice(UiNotice::PressedChanged(pressed));
         }
@@ -177,7 +175,7 @@ pub fn pressed_names(mask: u64) -> Vec<&'static str> {
 mod tests {
     use super::*;
     use crate::bridge_api::{BridgeHandle, BridgePhase};
-    use crate::mappings::{ButtonAction, MediaKey, Slot};
+    use crate::mappings::{ButtonAction, MediaKey};
     use crate::service::{NoticeSink, StubBridge, StubEngine};
     use std::sync::mpsc;
 
@@ -191,14 +189,13 @@ mod tests {
     }
 
     fn fast_timings() -> PumpTimings {
-        PumpTimings { tick: Duration::from_millis(5), status_period: Duration::from_millis(30) }
+        PumpTimings { poll: Duration::from_millis(5), status_period: Duration::from_millis(30) }
     }
 
     fn mappings_with_home() -> ButtonMappings {
         let mut mappings = ButtonMappings::default();
-        mappings.set_slot_action(
+        mappings.set_action(
             RemoteButton::Home,
-            Slot::Single,
             Some(ButtonAction::MediaKey { key: MediaKey::PlayPause }),
         );
         mappings
@@ -212,7 +209,7 @@ mod tests {
         let mut pressed = 0u64;
         let home = RemoteButton::Home;
         assert!(apply_edge(&mut pressed, EngineEvent::Press(home)));
-        assert!(!apply_edge(&mut pressed, EngineEvent::Press(home)), "repeat press is no change");
+        assert!(!apply_edge(&mut pressed, EngineEvent::Press(home)), "duplicate press is no change");
         assert_eq!(pressed, 1 << home.ordinal());
         assert!(apply_edge(&mut pressed, EngineEvent::Release(home)));
         assert!(!apply_edge(&mut pressed, EngineEvent::Release(home)));
@@ -250,7 +247,6 @@ mod tests {
 
         let state = engine.state();
         assert_eq!(state.handled.len(), 2, "both events reached the engine");
-        assert!(state.ticks >= 1, "the engine ticked at least once");
         assert_eq!(
             state.mappings.as_ref().map(|m| m.mapped_mask()),
             Some(1 << RemoteButton::Home.ordinal()),

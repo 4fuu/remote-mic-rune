@@ -1,9 +1,9 @@
-//! Button action model: what a recognized gesture does.
+//! Button action model: what one button does on every press.
 //!
 //! Pure data + serde (JSON). Config files key buttons by their stable
-//! lowercase names ("back", "ok", ...); unknown button names, unknown action
-//! types and unknown fields are rejected with clear errors so a hand-edited
-//! config never silently half-applies.
+//! lowercase names ("back", "ok", ...); unknown button names and unknown
+//! action types are rejected with clear errors so a hand-edited config never
+//! silently half-applies.
 
 use std::collections::BTreeMap;
 
@@ -52,22 +52,6 @@ impl VKey {
 
     pub fn code(self) -> u16 {
         self.0
-    }
-
-    /// Modifier keys (Shift/Ctrl/Alt/Win, both sides) cannot be a chord's
-    /// action key and never repeat as a standalone shortcut.
-    pub fn is_modifier(self) -> bool {
-        matches!(
-            self,
-            VKey::LSHIFT
-                | VKey::RSHIFT
-                | VKey::LCONTROL
-                | VKey::RCONTROL
-                | VKey::LMENU
-                | VKey::RMENU
-                | VKey::LWIN
-                | VKey::RWIN
-        )
     }
 }
 
@@ -124,16 +108,7 @@ pub enum ScrollDirection {
     Down,
 }
 
-/// Which gesture column the "hold to repeat" switch targets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ButtonTrigger {
-    Single,
-    Double,
-    Long,
-}
-
-/// One configured action for a gesture column. Serde is hand-rolled on the
+/// One configured action for a button. Serde is hand-rolled on the
 /// deserialize side: internally tagged serde enums cannot reject unknown
 /// fields, and a config must never half-apply silently.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
@@ -156,23 +131,8 @@ impl ButtonAction {
         *self != ButtonAction::Disabled
     }
 
-    /// Whether holding the button down may re-fire this action at an
-    /// interval. Only single-key shortcuts (non-modifier), media keys,
-    /// pointer moves and scrolls are safely repeatable.
-    pub fn allows_repeat(&self) -> bool {
-        match self {
-            ButtonAction::Disabled | ButtonAction::MouseClick { .. } => false,
-            ButtonAction::MediaKey { .. }
-            | ButtonAction::MouseMove { .. }
-            | ButtonAction::Scroll { .. } => true,
-            ButtonAction::Shortcut { chord } => {
-                matches!(chord.as_slice(), [key] if !key.is_modifier())
-            }
-        }
-    }
-
     /// Whether the chord switches to the secure desktop (Win+L in any
-    /// modifier order, exactly two keys). Such singles must wait for the
+    /// modifier order, exactly two keys). Such actions must wait for the
     /// physical release before injecting.
     pub fn shortcut_locks_workstation(chord: &[VKey]) -> bool {
         chord.len() == 2
@@ -310,34 +270,22 @@ impl<'de> Deserialize<'de> for ButtonAction {
     }
 }
 
-/// The three action columns of one button plus the hold-to-repeat switch
-/// (at most one slot; the gesture config derivation resolves conflicts).
+/// The one action a button fires on every press.
+///
+/// The `single` field keeps the existing settings shape: files written by
+/// builds with gesture columns still load, and the old `double` / `long` /
+/// `hold_repeat` keys are ignored (and dropped on the next save).
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(default)]
 pub struct ButtonActions {
-    #[serde(default)]
     pub single: ButtonAction,
-    #[serde(default)]
-    pub double: ButtonAction,
-    #[serde(default)]
-    pub long: ButtonAction,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hold_repeat: Option<ButtonTrigger>,
 }
 
 impl ButtonActions {
-    /// Any gesture column configured: whether enhanced capture should own
-    /// this button at all.
-    pub fn any_configured(&self) -> bool {
-        self.single.is_configured() || self.double.is_configured() || self.long.is_configured()
-    }
-
-    pub fn trigger(&self, trigger: ButtonTrigger) -> &ButtonAction {
-        match trigger {
-            ButtonTrigger::Single => &self.single,
-            ButtonTrigger::Double => &self.double,
-            ButtonTrigger::Long => &self.long,
-        }
+    /// Whether this button owns a captured action: `Disabled` and a missing
+    /// entry both mean "behave natively".
+    pub fn is_configured(&self) -> bool {
+        self.single.is_configured()
     }
 }
 
@@ -397,7 +345,20 @@ impl ButtonMappings {
         self.buttons.0.get(&button).cloned().unwrap_or_default()
     }
 
-    /// Bit mask of buttons with any configured action, indexed by
+    /// The configured action for `button`, or `None` when the mappings are
+    /// disabled or the button has no action.
+    pub fn action(&self, button: RemoteButton) -> Option<&ButtonAction> {
+        if !self.enabled {
+            return None;
+        }
+        self.buttons
+            .0
+            .get(&button)
+            .map(|actions| &actions.single)
+            .filter(|action| action.is_configured())
+    }
+
+    /// Bit mask of buttons with a configured action, indexed by
     /// [`RemoteButton::ordinal`]. Empty while disabled: the capture set the
     /// bridge requests derives from this.
     pub fn mapped_mask(&self) -> u64 {
@@ -406,7 +367,7 @@ impl ButtonMappings {
         }
         let mut mask = 0u64;
         for (button, actions) in &self.buttons.0 {
-            if actions.any_configured() {
+            if actions.is_configured() {
                 mask |= 1u64 << button.ordinal();
             }
         }
@@ -460,11 +421,6 @@ mod tests {
             RemoteButton::Back,
             ButtonActions {
                 single: shortcut(&[VKey::ESCAPE]),
-                double: shortcut(&[VKey::LWIN, VKey(0x4C)]),
-                long: ButtonAction::MediaKey {
-                    key: MediaKey::PlayPause,
-                },
-                hold_repeat: Some(ButtonTrigger::Single),
             },
         );
         mappings.buttons.0.insert(
@@ -474,11 +430,6 @@ mod tests {
                     dir: MoveDirection::Up,
                     px: 20,
                 },
-                long: ButtonAction::Scroll {
-                    dir: ScrollDirection::Down,
-                    lines: 3,
-                },
-                ..ButtonActions::default()
             },
         );
         mappings.buttons.0.insert(
@@ -505,13 +456,37 @@ mod tests {
         for button in rc_protocol::ALL_BUTTONS {
             let actions = mappings.actions(button);
             assert_eq!(actions, ButtonActions::default());
-            assert!(!actions.any_configured());
+            assert!(!actions.is_configured());
             assert_eq!(actions.single, ButtonAction::Disabled);
-            assert_eq!(actions.hold_repeat, None);
         }
         // Empty object parses to the default.
         let parsed: ButtonMappings = serde_json::from_str("{}").expect("parse");
         assert_eq!(parsed, mappings);
+    }
+
+    #[test]
+    fn legacy_gesture_columns_load_as_single_and_are_dropped() {
+        let json = r#"{
+            "enabled": true,
+            "buttons": {
+                "back": {
+                    "single": {"type": "shortcut", "chord": [27]},
+                    "double": {"type": "shortcut", "chord": [32]},
+                    "long": {"type": "disabled"},
+                    "hold_repeat": "single"
+                }
+            }
+        }"#;
+        let parsed: ButtonMappings = serde_json::from_str(json).expect("legacy file loads");
+        assert_eq!(
+            parsed.actions(RemoteButton::Back).single,
+            shortcut(&[VKey::ESCAPE])
+        );
+        let saved = serde_json::to_string(&parsed).expect("serialize");
+        assert!(!saved.contains("\"double\""));
+        assert!(!saved.contains("\"long\""));
+        assert!(!saved.contains("\"hold_repeat\""));
+        assert!(saved.contains("\"single\""));
     }
 
     #[test]
@@ -559,32 +534,6 @@ mod tests {
             error.to_string().contains("unknown field `chord` for `disabled`"),
             "{error}"
         );
-    }
-
-    #[test]
-    fn allows_repeat_follows_action_shape() {
-        assert!(shortcut(&[VKey::RETURN]).allows_repeat());
-        assert!(ButtonAction::MediaKey {
-            key: MediaKey::VolumeUp
-        }
-        .allows_repeat());
-        assert!(ButtonAction::MouseMove {
-            dir: MoveDirection::Left,
-            px: 10
-        }
-        .allows_repeat());
-        assert!(ButtonAction::Scroll {
-            dir: ScrollDirection::Up,
-            lines: 1
-        }
-        .allows_repeat());
-        assert!(!shortcut(&[VKey::LCONTROL, VKey(0x43)]).allows_repeat()); // Ctrl+C
-        assert!(!shortcut(&[VKey::LWIN]).allows_repeat()); // lone modifier
-        assert!(!ButtonAction::MouseClick {
-            button: MouseClickButton::Left
-        }
-        .allows_repeat());
-        assert!(!ButtonAction::Disabled.allows_repeat());
     }
 
     #[test]

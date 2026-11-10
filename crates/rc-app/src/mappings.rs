@@ -1,11 +1,12 @@
-//! Button mapping data model: the exact API shapes rc-mapping documents
-//! (`VKey`, `ButtonMappings`, `ButtonActions`, `ButtonAction`), mirrored
-//! locally so rc-app compiles before the sibling crate lands.
+//! Button mapping data model: the app-side shape of `rc-mapping`'s
+//! [`ButtonMappings`] (`VKey`, `ButtonAction`, `ButtonMappings`), mirrored
+//! locally so the UI can persist and edit settings without depending on the
+//! injection crate at render time.
 //!
-//! When `rc-mapping` exists, delete the type definitions here and re-export
-//! from the crate instead (`pub use rc_mapping::{VKey, ButtonMappings, ..}`);
-//! every other module keeps calling through [`crate::bridge_api`], which is
-//! the only seam that must change. See `bridge_api.rs` for the full recipe.
+//! Each button has exactly one action, fired on every press. The `single`
+//! field name keeps old `settings.json` files readable: a file written by a
+//! build with double/long/repeat columns still loads its single action and
+//! ignores the removed columns, which disappear on the next save.
 
 use std::collections::BTreeMap;
 
@@ -98,7 +99,7 @@ pub enum MouseButton {
     Middle,
 }
 
-/// One configured action for a button gesture (rc-mapping's action enum).
+/// One configured action for a button (rc-mapping's action enum).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ButtonAction {
@@ -121,75 +122,25 @@ pub enum ButtonAction {
     },
 }
 
-/// Which gesture slot of a button a mapping applies to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Slot {
-    Single,
-    Double,
-    Long,
-    HoldRepeat,
-}
-
-impl Slot {
-    /// All slots, in display and serialization order.
-    pub const ALL: [Slot; 4] = [Slot::Single, Slot::Double, Slot::Long, Slot::HoldRepeat];
-
-    /// Short caption the UI puts above the slot's picker ("1", "2", "L", "R").
-    pub fn caption(self) -> &'static str {
-        match self {
-            Slot::Single => "Single",
-            Slot::Double => "Double",
-            Slot::Long => "Long",
-            Slot::HoldRepeat => "Repeat",
-        }
-    }
-
-    /// 0-based index inside [`ButtonActions`]; also the UI editor key base.
-    pub fn index(self) -> usize {
-        match self {
-            Slot::Single => 0,
-            Slot::Double => 1,
-            Slot::Long => 2,
-            Slot::HoldRepeat => 3,
-        }
-    }
-}
-
-/// All configured actions for one button (rc-mapping's `ButtonActions`).
+/// All configured actions for one button. The name and `single` field keep
+/// the old settings shape; newly saved files carry only this one action.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ButtonActions {
     pub single: Option<ButtonAction>,
-    pub double: Option<ButtonAction>,
-    pub long: Option<ButtonAction>,
-    pub hold_repeat: Option<ButtonAction>,
 }
 
 impl ButtonActions {
-    pub fn slot(&self, slot: Slot) -> Option<&ButtonAction> {
-        match slot {
-            Slot::Single => self.single.as_ref(),
-            Slot::Double => self.double.as_ref(),
-            Slot::Long => self.long.as_ref(),
-            Slot::HoldRepeat => self.hold_repeat.as_ref(),
-        }
-    }
-
-    pub fn set_slot(&mut self, slot: Slot, action: Option<ButtonAction>) {
-        match slot {
-            Slot::Single => self.single = action,
-            Slot::Double => self.double = action,
-            Slot::Long => self.long = action,
-            Slot::HoldRepeat => self.hold_repeat = action,
-        }
+    pub fn action(&self) -> Option<&ButtonAction> {
+        self.single.as_ref()
     }
 
     /// A `Disabled` action counts as unconfigured: it exists so a hand-edited
     /// settings file can spell out "does nothing" explicitly.
     pub fn is_configured(&self) -> bool {
-        Slot::ALL.iter().any(|slot| {
-            self.slot(*slot).is_some_and(|a| !matches!(a, ButtonAction::Disabled))
-        })
+        self.single
+            .as_ref()
+            .is_some_and(|action| !matches!(action, ButtonAction::Disabled))
     }
 }
 
@@ -202,46 +153,45 @@ pub struct ButtonMappings {
 }
 
 impl ButtonMappings {
-    pub fn actions_for(&self, button: RemoteButton) -> ButtonActions {
-        self.buttons.get(button.name()).cloned().unwrap_or_default()
+    /// The configured action for `button`, or `None` when the mapping is
+    /// absent or explicitly `Disabled`.
+    pub fn action_for(&self, button: RemoteButton) -> Option<&ButtonAction> {
+        self.buttons
+            .get(button.name())
+            .and_then(|actions| actions.action())
+            .filter(|action| !matches!(action, ButtonAction::Disabled))
     }
 
-    pub fn actions_mut(&mut self, button: RemoteButton) -> &mut ButtonActions {
-        self.buttons.entry(button.name().to_string()).or_default()
-    }
-
-    pub fn slot_action(&self, button: RemoteButton, slot: Slot) -> Option<&ButtonAction> {
-        self.buttons.get(button.name()).and_then(|a| a.slot(slot))
-    }
-
-    pub fn set_slot_action(&mut self, button: RemoteButton, slot: Slot, action: Option<ButtonAction>) {
-        let actions = self.actions_mut(button);
-        actions.set_slot(slot, action);
-        if !actions.is_configured() {
-            // Keep the file tidy: an entry with only Disabled/None slots goes away.
+    pub fn set_action(&mut self, button: RemoteButton, action: Option<ButtonAction>) {
+        let entry = self.buttons.entry(button.name().to_string()).or_default();
+        entry.single = action;
+        if !entry.is_configured() {
+            // Keep the file tidy: an entry with no action (or only Disabled)
+            // goes away.
             self.buttons.remove(button.name());
         }
     }
 
-    /// Bit per button (ordinal bit set) for every button with at least one
-    /// configured action. This is the `mapped_mask` the capture set derives
-    /// from; it is recomputed on every mappings change.
+    /// Bit per button (ordinal bit set) for every button with a configured
+    /// action. This is the `mapped_mask` the capture set derives from; it is
+    /// recomputed on every mappings change.
     pub fn mapped_mask(&self) -> u64 {
         let mut mask = 0u64;
         for button in rc_protocol::ALL_BUTTONS {
-            if self.actions_for(button).is_configured() {
+            if self
+                .buttons
+                .get(button.name())
+                .is_some_and(|actions| actions.is_configured())
+            {
                 mask |= 1u64 << button.ordinal();
             }
         }
         mask
     }
 
-    /// Number of buttons with at least one configured action.
+    /// Number of buttons with a configured action.
     pub fn configured_buttons(&self) -> usize {
-        rc_protocol::ALL_BUTTONS
-            .iter()
-            .filter(|b| self.actions_for(**b).is_configured())
-            .count()
+        self.mapped_mask().count_ones() as usize
     }
 }
 
@@ -250,7 +200,9 @@ mod tests {
     use super::*;
 
     fn shortcut(keys: &[VKey]) -> ButtonAction {
-        ButtonAction::Shortcut { chord: keys.to_vec() }
+        ButtonAction::Shortcut {
+            chord: keys.to_vec(),
+        }
     }
 
     #[test]
@@ -261,8 +213,11 @@ mod tests {
     #[test]
     fn mapped_mask_sets_one_bit_per_mapped_button() {
         let mut m = ButtonMappings::default();
-        m.set_slot_action(RemoteButton::Home, Slot::Single, Some(shortcut(&[vk::F5])));
-        m.set_slot_action(RemoteButton::Ok, Slot::Double, Some(ButtonAction::MediaKey { key: MediaKey::Mute }));
+        m.set_action(RemoteButton::Home, Some(shortcut(&[vk::F5])));
+        m.set_action(
+            RemoteButton::Ok,
+            Some(ButtonAction::MediaKey { key: MediaKey::Mute }),
+        );
         let mask = m.mapped_mask();
         assert_eq!(mask.count_ones(), 2);
         assert_ne!(mask & (1 << RemoteButton::Home.ordinal()), 0);
@@ -273,18 +228,18 @@ mod tests {
     #[test]
     fn disabled_action_is_not_mapped() {
         let mut m = ButtonMappings::default();
-        m.set_slot_action(RemoteButton::Up, Slot::Single, Some(ButtonAction::Disabled));
+        m.set_action(RemoteButton::Up, Some(ButtonAction::Disabled));
         assert_eq!(m.mapped_mask(), 0, "Disabled is an explicit no-op, not a mapping");
         // The empty entry is dropped so the settings file stays tidy.
         assert!(!m.buttons.contains_key(RemoteButton::Up.name()));
     }
 
     #[test]
-    fn clearing_the_last_action_removes_the_button_entry() {
+    fn clearing_the_action_removes_the_button_entry() {
         let mut m = ButtonMappings::default();
-        m.set_slot_action(RemoteButton::Left, Slot::Long, Some(shortcut(&[vk::END])));
+        m.set_action(RemoteButton::Left, Some(shortcut(&[vk::END])));
         assert_eq!(m.mapped_mask().count_ones(), 1);
-        m.set_slot_action(RemoteButton::Left, Slot::Long, None);
+        m.set_action(RemoteButton::Left, None);
         assert_eq!(m.mapped_mask(), 0);
         assert!(m.buttons.is_empty());
     }
@@ -292,23 +247,51 @@ mod tests {
     #[test]
     fn mappings_round_trip_through_json() {
         let mut m = ButtonMappings::default();
-        m.set_slot_action(RemoteButton::Back, Slot::Single, Some(shortcut(&[vk::CONTROL, vk::F12])));
-        m.set_slot_action(RemoteButton::Back, Slot::Long, Some(ButtonAction::MediaKey { key: MediaKey::PlayPause }));
-        m.set_slot_action(RemoteButton::Ok, Slot::Double, Some(ButtonAction::MouseClick { button: MouseButton::Right }));
+        m.set_action(
+            RemoteButton::Back,
+            Some(shortcut(&[vk::CONTROL, vk::F12])),
+        );
+        m.set_action(
+            RemoteButton::Ok,
+            Some(ButtonAction::MouseClick {
+                button: MouseButton::Right,
+            }),
+        );
         let json = serde_json::to_string(&m).unwrap();
         assert_eq!(serde_json::from_str::<ButtonMappings>(&json).unwrap(), m);
         assert!(json.contains(r#""type":"shortcut""#));
-        assert!(json.contains(r#""type":"media_key""#));
+        assert!(json.contains(r#""type":"mouse_click""#));
     }
 
     #[test]
-    fn json_may_spell_out_disabled_slots() {
+    fn legacy_gesture_columns_load_as_single_and_are_dropped() {
+        let json = r#"{
+            "buttons": {
+                "back": {
+                    "single": {"type": "shortcut", "chord": [27]},
+                    "double": {"type": "shortcut", "chord": [32]},
+                    "long": {"type": "media_key", "key": "play_pause"},
+                    "hold_repeat": {"type": "shortcut", "chord": [13]}
+                }
+            }
+        }"#;
+        let m: ButtonMappings = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            m.action_for(RemoteButton::Back),
+            Some(&shortcut(&[vk::ESCAPE]))
+        );
+        let saved = serde_json::to_string(&m).unwrap();
+        assert!(!saved.contains("\"double\""));
+        assert!(!saved.contains("\"long\""));
+        assert!(!saved.contains("\"hold_repeat\""));
+        assert!(saved.contains("\"single\""));
+    }
+
+    #[test]
+    fn json_may_spell_out_a_disabled_action() {
         let json = r#"{"buttons":{"up":{"single":{"type":"disabled"}}}}"#;
         let m: ButtonMappings = serde_json::from_str(json).unwrap();
         assert_eq!(m.mapped_mask(), 0);
-        assert_eq!(
-            m.slot_action(RemoteButton::Up, Slot::Single),
-            Some(&ButtonAction::Disabled)
-        );
+        assert_eq!(m.action_for(RemoteButton::Up), None);
     }
 }

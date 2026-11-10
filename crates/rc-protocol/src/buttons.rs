@@ -129,19 +129,6 @@ impl RemoteButton {
             RemoteButton::VolumeDown => "volume_down",
         }
     }
-
-    /// Default auto-repeat interval while held (repeat mode).
-    pub fn repeat_interval(self) -> std::time::Duration {
-        std::time::Duration::from_millis(match self {
-            RemoteButton::Up
-            | RemoteButton::Down
-            | RemoteButton::Left
-            | RemoteButton::Right
-            | RemoteButton::VolumeUp
-            | RemoteButton::VolumeDown => 100,
-            _ => 150,
-        })
-    }
 }
 
 /// Validate that every usage is a known, non-duplicated button usage.

@@ -242,7 +242,7 @@ pub fn save(dir: &Path, settings: &AppSettings) -> Result<(), SaveError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mappings::{ButtonAction, MediaKey, Slot};
+    use crate::mappings::{ButtonAction, MediaKey};
 
     fn unique_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir()
@@ -260,9 +260,8 @@ mod tests {
         settings.voice_synth_to = Some(0x00E6);
         settings.window.dark = Some(true);
         settings.language = Language::Zh;
-        settings.mappings.set_slot_action(
+        settings.mappings.set_action(
             rc_protocol::RemoteButton::Home,
-            Slot::Single,
             Some(ButtonAction::MediaKey { key: MediaKey::PlayPause }),
         );
         settings

@@ -30,7 +30,6 @@ use {
     rc_protocol::consts::{
         BRIDGE_MAX_DENY, BRIDGE_PIPE_NAME, BRIDGE_PROTOCOL_VERSION, MAX_LINE_BYTES,
     },
-    rc_protocol::RemoteButton,
 };
 
 use crate::state::{targets_for, BridgeCounters, BridgePhase, BridgeShared, CaptureTargets};
@@ -804,18 +803,12 @@ fn run_connection(
     }
 
     if reason != "replaced" {
-        // Fail-open teardown: release every pressed state. Individual
-        // releases (not ReleaseAll) so completed gestures' pending windows
-        // still resolve naturally in the engine.
-        let events = {
+        // Fail-open teardown: clear every pressed state in one absolute
+        // event. ReleaseAll also drops a deferred Win+L action instead of
+        // firing it on a link that is going away.
+        {
             let mut state = lock(&shared);
-            let mut events = Vec::new();
-            for usage in &state.pressed {
-                if let Some(button) = RemoteButton::from_usage(*usage) {
-                    events.push(EngineEvent::Release(button));
-                }
-            }
-            state.counters.release_edges_total += events.len() as u64;
+            state.counters.release_all_total += 1;
             if reason != "helper_bye" {
                 state.counters.teardown_releases_total += 1;
             }
@@ -829,11 +822,8 @@ fn run_connection(
             state.transport = "";
             state.recovering = false;
             state.synth_confirmed = false;
-            events
-        };
-        for event in events {
-            let _ = sender.send(event);
         }
+        let _ = sender.send(EngineEvent::ReleaseAll);
     }
     writer.disconnect();
     {

@@ -11,8 +11,8 @@ channel, and makes all 13 buttons programmable:
 
 - **13 semantic buttons** — Back, OK, TV, Home, Left/Right/Up/Down, Menu,
   Power, Volume mute/+/−.
-- **Per-button gestures** — each button carries independent **single press,
-  double press and long press** bindings, plus hold-to-repeat.
+- **One action per button** — each button fires its action on every press;
+  a double press fires it twice and a long press fires it once.
 - **Actions** — keyboard shortcuts (full chords with modifiers), media keys
   (volume, play/pause, previous/next), and mouse clicks.
 - **The three Windows-invisible keys made usable** — Back, Volume+ and
@@ -38,7 +38,7 @@ RC003 (BLE HID) ──► WUDFHost.exe ──► kbdhid ──► Windows input
                    rc-bridge (pipe server, token auth, per-generation
                               key ownership, watchdogs)
                         │
-                   rc-mapping (single/double/long gestures → SendInput)
+                   rc-mapping (button action → SendInput)
 ```
 
 A scheduled task runs the elevated helper with a single UAC prompt. The
@@ -48,9 +48,8 @@ agent hooks the host→kernel HID report submission at the
 `NtDeviceIoControlFile` boundary and selectively clears chosen usages from
 keyboard report 0x01 before the kernel copies it — the only place where
 Back/Volume+/Volume− still exist. Kept keys flow over a named-pipe bridge to
-the app, where the gesture engine turns press/release edges into
-single/double/long gestures and replays them as real system input with
-`SendInput`.
+the app, where the mapping engine fires the button's configured action and
+replays it as real system input with `SendInput`.
 
 **Fail-open by design.** The agent only modifies reports while the lease is
 alive. If the helper dies, is force-killed, stops renewing, or the app goes
@@ -65,7 +64,7 @@ behaves like a plain keyboard again — no stuck keys, nothing left armed.
 | `crates/rc-agent` | cdylib | Injected into WUDFHost: IOCTL hook, selective usage clearing, lease, voice-key synthesis. |
 | `crates/rc-helper` | bin | Elevated helper: locate the exclusive host, inject, renew the lease, bridge agent↔app, scheduled task, device-node recovery. |
 | `crates/rc-bridge` | lib | App-side link endpoint: pipe server, token auth, per-generation key ownership, watchdogs. |
-| `crates/rc-mapping` | lib | Gesture recognizer (single/double/long/repeat) + action model + SendInput injection. |
+| `crates/rc-mapping` | lib | Per-button action model + SendInput injection. |
 | `crates/rc-app` | bin | Rune UI shell: status, capture control, mapping canvas, helper task, settings. |
 
 ## Quick start
@@ -103,7 +102,7 @@ each stage separately before the full UI chain.
   workspace layout.
 - [docs/mechanisms.md](docs/mechanisms.md) — the design catalogue:
   report-layer capture, lease fail-open, key ownership, safety gates,
-  voice-key synthesis, gesture timings, scheduled task, device recovery,
+  voice-key synthesis, the mapping engine, scheduled task, device recovery,
   token auth.
 - [docs/ui.md](docs/ui.md) — the app window: inset-grouped form and the
   spatial mapping canvas.

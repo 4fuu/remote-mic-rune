@@ -90,7 +90,11 @@ fn main() {
         min_size: Some((1000.0, 680.0)),
         ..rune::AppSpec::new("Remote Mic Rune", (1180.0, 820.0), ui::AppState::from_startup, ui::view)
     })
-    .titlebar(rune::Titlebar::new(views::TITLEBAR_HEIGHT));
+    .titlebar(rune::Titlebar::new(views::TITLEBAR_HEIGHT))
+    // Closing the window hides it to the tray; the app keeps running until
+    // the tray's Quit item (or the launch-error Exit button) quits it. The
+    // helper and bridge stay connected while the window is hidden.
+    .keep_running();
     let handle = app.handle();
 
     // Startup data for `init` (fn() -> S cannot take arguments).
@@ -107,7 +111,7 @@ fn main() {
         ui: Some(handle.clone()),
     });
 
-    // 5. Engine pump: bridge events -> engine, 25 ms ticks, status -> UI.
+    // 5. Engine pump: bridge events -> engine, status -> UI.
     if let (Some(bridge), Some(engine)) = (bridge, engine) {
         let pump = engine::spawn_pump(
             engine_rx,

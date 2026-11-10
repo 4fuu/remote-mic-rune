@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Gesture recognizer, button mapping model, and SendInput injection for remote-mic-rune."
+description = "Per-button action model and SendInput injection for remote-mic-rune."
 
 [dependencies]
 rc-protocol = { path = "../rc-protocol" }

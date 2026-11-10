@@ -83,7 +83,7 @@ what it owns:
   within **1.5 s** (`OWNERSHIP_TIMEOUT_MS`). That timeout is deliberately
   shorter than the agent's 2 s lease, so the native keyboard path always
   recovers before the report layer could still be holding keys.
-- Losing ownership releases every pressed key in the gesture engine but
+- Losing ownership releases every pressed button in the mapping engine but
   keeps the link: a stale helper can never keep phantom keys alive.
 
 ## Absolute-state edges (self-healing)
@@ -152,25 +152,22 @@ listen for:
 - Synthesis runs only while capture is armed and the lease is alive, and
   each frame's outcome is traced (rate-limited) and reported to the app.
 
-## Gesture engine timings
+## Mapping engine
 
-One independent state machine per button in `rc-mapping`, ticked at a fixed
-25 ms cadence:
+`rc-mapping` maps each of the 13 buttons to exactly one action:
 
-- **Double-click window: 300 ms** between two press onsets.
-- **Long press: 550 ms** held.
-- **Repeat start delay: 350 ms** before a hold-to-repeat stream begins;
-  per-button repeat interval afterwards (100 ms for arrows and volume,
-  150 ms otherwise).
-- If only a single action is configured, it fires immediately on the press
-  edge (zero latency); if a double or long binding exists for the button,
-  the single waits out its window and confirms on expiry.
-- A hold that outlasts the double window concludes as a single (and may
-  enter repeat); a second press held past the window cancels a pending
-  double.
+- A press edge fires that action immediately. There is no double-click
+  window, long-press threshold or hold-to-repeat: pressing twice fires the
+  action twice, and holding fires it once.
+- Releasing the button has no action of its own. A release-all edge (the
+  bridge's ownership loss / teardown signal) drops a pending action rather
+  than firing it.
+- Win+L is the one exception to press-edge firing: injecting it before the
+  physical release can race the raw DOWN/UP pair, so it waits for release
+  and then fires exactly once.
 - Firing actions desktop-wide goes through `SendInput` — chords with
-  modifiers, media keys, mouse clicks — with desktop-switching singles
-  deferred to physical release so the raw DOWN/UP pair settles first.
+  modifiers, media keys, mouse clicks. Injection failures are counted and
+  surfaced through the engine snapshot.
 
 ## Scheduled-task one-UAC enable
 

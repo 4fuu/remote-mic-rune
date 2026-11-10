@@ -112,11 +112,6 @@ pub const REPORT_LEN: usize = 9;
 /// Slots are little-endian: usage = lo | (hi << 8).
 pub const USAGE_SLOT_OFFSETS: [usize; 3] = [3, 5, 7];
 
-/// Gesture recognizer timings (validated on real hardware).
-pub const DOUBLE_CLICK_WINDOW_MS: u64 = 300;
-pub const LONG_PRESS_THRESHOLD_MS: u64 = 550;
-pub const REPEAT_START_DELAY_MS: u64 = 350;
-
 // ---------------------------------------------------------------------------
 // Device identity
 // ---------------------------------------------------------------------------

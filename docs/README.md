@@ -5,8 +5,8 @@
   workspace layout.
 - [Mechanisms](mechanisms.md) — the design catalogue: report-layer capture,
   lease fail-open, per-generation key ownership, absolute-state edges,
-  safety gates, voice-key synthesis, gesture timings, the one-UAC scheduled
-  task, device-node recovery, and token auth.
+  safety gates, voice-key synthesis, the mapping engine, the one-UAC
+  scheduled task, device-node recovery, and token auth.
 - [UI](ui.md) — the app window: SwiftUI-style inset-grouped form and the
   spatial mapping canvas.
 - [Building](building.md) — host tests, rendering tests, Windows checks,

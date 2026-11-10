@@ -143,7 +143,6 @@ fn spawn_demo_events(engine_tx: std::sync::mpsc::Sender<EngineEvent>, bridge: Ar
 #[derive(Debug, Clone, Default)]
 pub struct StubEngineState {
     pub handled: Vec<EngineEvent>,
-    pub ticks: u64,
     pub mappings: Option<ButtonMappings>,
 }
 
@@ -173,10 +172,6 @@ impl StubEngine {
 impl MappingEngineHandle for StubEngine {
     fn handle(&self, event: EngineEvent) {
         self.state.lock().unwrap().handled.push(event);
-    }
-
-    fn tick(&self, _now_ms: u64) {
-        self.state.lock().unwrap().ticks += 1;
     }
 
     fn replace_mappings(&self, mappings: &ButtonMappings) {
@@ -257,18 +252,15 @@ mod tests {
     fn stub_engine_records_everything_the_pump_feeds_it() {
         let engine = StubEngine::new();
         let mut mappings = ButtonMappings::default();
-        mappings.set_slot_action(
+        mappings.set_action(
             RemoteButton::Back,
-            crate::mappings::Slot::Single,
             Some(crate::mappings::ButtonAction::Disabled),
         );
         engine.replace_mappings(&mappings);
         engine.handle(EngineEvent::Press(RemoteButton::Back));
         engine.handle(EngineEvent::Release(RemoteButton::Back));
         engine.handle(EngineEvent::ReleaseAll);
-        engine.tick(25);
         let state = engine.state();
-        assert_eq!(state.ticks, 1);
         assert_eq!(state.handled.len(), 3);
         assert!(state.mappings.is_some());
     }

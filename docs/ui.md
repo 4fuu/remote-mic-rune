@@ -19,6 +19,8 @@ catalog, following the OS UI language by default (see
   (snap layouts included); on Linux the native frame stays and the band
   reads as a toolbar. The band is a `.window_drag()` region: drag to move,
   double-click to maximize/restore, right-click for the window menu.
+  Closing the window hides it to the tray; the app keeps running until the
+  tray's **Quit** item (or the launch-error **Exit** button) quits it.
 - **Section tabs** — a centered `SegmentedControl` with the five sections
   (English labels shown here; the UI renders them in the active language):
   **Status · Capture · Buttons · Helper · Settings**.
@@ -61,9 +63,10 @@ The heart of the window. Instead of a table, the 13 buttons are mapped on a
   canvas' center, 250 × 508 points at design size.
 - Twelve **anchored cards** flank the photo in two columns; each card is one
   button: a live dot that lights up in the accent color while that button is
-  physically held, the button name, and three compact pickers —
-  **Single / Double / Long** — with actions from the shared picker
-  (Disabled, media keys, Shortcut, mouse clicks).
+  physically held, the button name, and one compact action picker with
+  actions from the shared picker (Disabled, media keys, Shortcut, mouse
+  clicks). The action fires on every press; a double press fires it twice
+  and a long press fires it once.
 - **Leader lines** connect every card to its physical spot on the photo;
   each line turns accent-colored while its button is held, matching the
   card dot.
@@ -75,8 +78,8 @@ The heart of the window. Instead of a table, the 13 buttons are mapped on a
 - The canvas is authored at a design width (800 pt) and scales
   proportionally when the window is narrower — photo, cards and lines keep
   their geometry down to ~0.86 scale while card text keeps its size; extra
-  height (many shortcut drafts) adds air instead of stretching the photo
-  past ~1.2×.
+  height (a shortcut draft on an edge card) adds air instead of stretching
+  the photo past ~1.2×.
 
 ### Helper
 

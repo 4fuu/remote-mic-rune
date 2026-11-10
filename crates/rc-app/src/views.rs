@@ -21,9 +21,9 @@ use rc_protocol::buttons::ALWAYS_CAPTURED_BUTTONS;
 
 use crate::bridge_api::{BridgePhase, BridgeStatus};
 use crate::i18n::{tr, tr_fmt, Lang, Language};
-use crate::mappings::{ButtonAction, MediaKey, MouseButton, Slot};
+use crate::mappings::{ButtonAction, MediaKey, MouseButton};
 use crate::task::TaskStatus;
-use crate::ui::{picker_options, slot_key, AppState, HelperCommand, Section};
+use crate::ui::{picker_options, AppState, HelperCommand, Section};
 
 // -- SwiftUI-flavoured type scale -------------------------------------------
 
@@ -652,14 +652,14 @@ const PHOTO_BAND_Y: f32 = 31.0;
 /// would crowd the card columns, so canvas growth beyond that (a pile of
 /// shortcut drafts on edge cards) adds air above and below instead.
 const PHOTO_GROW_MAX: f32 = 1.2;
-/// The three gesture pickers' trigger width at scale 1.
-const PICK_W: f32 = 74.0;
+/// The action picker's trigger width at scale 1.
+const PICK_W: f32 = 120.0;
 /// Card row metrics measured from the rendered kit (and asserted by the
-/// geometry test): the compact card's single row — the 28-pt pickers plus
+/// geometry test): the compact card's single row — the 28-pt picker plus
 /// 14-pt vertical padding — and a shortcut-draft row (hairline divider
-/// above it, 28-pt field, 12-pt bottom padding) added while a shortcut
-/// draft exists for one of the button's slots. Horizontal metrics scale
-/// with the laid-out canvas, vertical ones stay fixed.
+/// above it, 28-pt field, 12-pt bottom padding) added while the button's
+/// action is a shortcut. Horizontal metrics scale with the laid-out canvas,
+/// vertical ones stay fixed.
 const CARD_ROW_H: f32 = 56.0;
 const CARD_DRAFT_H: f32 = 41.0;
 const CARD_PAD_X: f32 = 12.0;
@@ -747,12 +747,9 @@ impl CanvasGeom {
 }
 
 /// A card's rendered height from the kit's row metrics: the compact single
-/// row, plus one shortcut-draft row per slot holding a shortcut.
+/// row, plus the shortcut-draft row while the button's action is a shortcut.
 fn card_estimate_h(s: &AppState, button: RemoteButton) -> f32 {
-    let drafts = [Slot::Single, Slot::Double, Slot::Long]
-        .iter()
-        .filter(|slot| s.shortcut_edits.contains_key(&slot_key(button, **slot)))
-        .count() as f32;
+    let drafts = if s.shortcut_edits.contains_key(&button) { 1.0 } else { 0.0 };
     CARD_ROW_H + drafts * CARD_DRAFT_H
 }
 
@@ -809,9 +806,9 @@ fn leader_lines(p: &Placement, g: &CanvasGeom, color: rune::Color) -> Vec<El> {
     vec![vertical, horizontal]
 }
 
-/// Short label for a picker trigger. The compact row shows the three gesture
-/// pickers side by side, so the chosen value shrinks to its essence; the
-/// picker's option list stays the full [`picker_options`] wording.
+/// Short label for a picker trigger. The compact row shows one action picker,
+/// so the chosen value shrinks to its essence; the picker's option list stays
+/// the full [`picker_options`] wording.
 fn action_short_label(lang: Lang, action: &ButtonAction) -> &'static str {
     match action {
         ButtonAction::Disabled => "—",
@@ -835,9 +832,9 @@ fn action_short_label(lang: Lang, action: &ButtonAction) -> &'static str {
 }
 
 /// The name a card shows for its button: the compact row has one line for the
-/// dot, the name and three pickers, so the snake-case protocol names become
-/// their product labels (the volume rocker reads like the remote's own `+` /
-/// `-` glyphs). Element keys stay keyed by the protocol name.
+/// dot, the name and the action picker, so the snake-case protocol names
+/// become their product labels (the volume rocker reads like the remote's own
+/// `+` / `-` glyphs). Element keys stay keyed by the protocol name.
 fn button_display_name(lang: Lang, button: RemoteButton) -> &'static str {
     match button {
         RemoteButton::Power => tr(lang, "Power"),
@@ -856,21 +853,10 @@ fn button_display_name(lang: Lang, button: RemoteButton) -> &'static str {
     }
 }
 
-/// The gesture slot's display caption (for the pickers' accessible labels).
-/// Element keys keep the stable ASCII `Slot::caption()` spelling.
-fn slot_display_caption(lang: Lang, slot: Slot) -> &'static str {
-    match slot {
-        Slot::Single => tr(lang, "Single"),
-        Slot::Double => tr(lang, "Double"),
-        Slot::Long => tr(lang, "Long"),
-        Slot::HoldRepeat => tr(lang, "Repeat"),
-    }
-}
-
 /// One button's mapping card, `card_w` wide: a single compact row — pressed
-/// dot, button name, and the three gesture pickers side by side — plus a
+/// dot, button name, and the button's one action picker — plus a
 /// shortcut-draft row (text field, and the parse error while it is invalid)
-/// per slot holding a shortcut draft. On the canvas the caller positions the
+/// when the action is a shortcut. On the canvas the caller positions the
 /// returned card absolutely.
 fn button_card(s: &AppState, button: RemoteButton, k: &Kit, layer: &mut Vec<El>, card_w: f32) -> El {
     let pressed = s.pressed & (1 << button.ordinal()) != 0;
@@ -900,85 +886,78 @@ fn button_card(s: &AppState, button: RemoteButton, k: &Kit, layer: &mut Vec<El>,
                 .color(k.c.text_base),
         );
 
-    let mut drafts: Vec<El> = Vec::new();
-    for slot in [Slot::Single, Slot::Double, Slot::Long] {
-        let pick_key = format!("pick-{}-{}", button.name(), slot.caption().to_ascii_lowercase());
-        let current = s
-            .settings
-            .mappings
-            .slot_action(button, slot)
-            .map(|a| action_short_label(s.lang, a))
-            .unwrap_or("—");
-        let options = picker_options(s.lang);
-        main = main.child({
-            // Mini field: the kit trigger with its paddings tightened for the
-            // compact row, so the short labels fit the `pick_w` box.
-            Select::new(pick_key.clone(), &options)
-                .appearance(SelectAppearance::Field)
-                .label(format!(
-                    "{} {}",
-                    button_display_name(s.lang, button),
-                    slot_display_caption(s.lang, slot)
-                ))
-                .width(pick_w)
-                .current(Some(current))
-                .open(s.open_picker.as_deref() == Some(pick_key.as_str()))
-                .on_toggle({
-                    let pick_key = pick_key.clone();
-                    move |s: &mut AppState| {
-                        s.open_picker = match &s.open_picker {
-                            Some(open) if *open == pick_key => None,
-                            _ => Some(pick_key.clone()),
-                        }
+    let pick_key = format!("pick-{}", button.name());
+    let current = s
+        .settings
+        .mappings
+        .action_for(button)
+        .map(|action| action_short_label(s.lang, action))
+        .unwrap_or("—");
+    let options = picker_options(s.lang);
+    main = main.child({
+        Select::new(pick_key.clone(), &options)
+            .appearance(SelectAppearance::Field)
+            .label(format!(
+                "{} {}",
+                button_display_name(s.lang, button),
+                s.tr("Action")
+            ))
+            .width(pick_w)
+            .current(Some(current))
+            .open(s.open_picker.as_deref() == Some(pick_key.as_str()))
+            .on_toggle({
+                let pick_key = pick_key.clone();
+                move |s: &mut AppState| {
+                    s.open_picker = match &s.open_picker {
+                        Some(open) if *open == pick_key => None,
+                        _ => Some(pick_key.clone()),
                     }
-                })
-                .on_close(|s: &mut AppState| s.open_picker = None)
-                .on_choose(move |s: &mut AppState, choice: &str, _: &mut Tx| {
-                    s.open_picker = None;
-                    s.choose_action(button, slot, choice);
-                })
-                .build(k, layer)
-                // Mini field: tighten the kit trigger's own trailing padding
-                // and gap so the short labels fit the `pick_w` box (the 8-pt
-                // leading inset lives on the value row inside and stays).
-                .gap(2.0)
-                .pr(2.0)
-        });
+                }
+            })
+            .on_close(|s: &mut AppState| s.open_picker = None)
+            .on_choose(move |s: &mut AppState, choice: &str, _: &mut Tx| {
+                s.open_picker = None;
+                s.choose_action(button, choice);
+            })
+            .build(k, layer)
+            // Mini field: tighten the kit trigger's own trailing padding and
+            // gap so the short labels fit the `pick_w` box (the 8-pt leading
+            // inset lives on the value row inside and stays).
+            .gap(2.0)
+            .pr(2.0)
+    });
 
-        // Shortcut drafts: a row under the compact main row.
-        let edit_key = slot_key(button, slot);
-        if let Some(edit) = s.shortcut_edits.get(&edit_key) {
-            let error = s.chord_errors.get(&edit_key).cloned();
-            let mut draft = col()
-                .key(format!("shortcut-{pick_key}"))
-                .w_full()
-                .gap(space::S1)
-                .px(CARD_PAD_X * sc)
-                .pb(space::S3);
+    let mut drafts: Vec<El> = Vec::new();
+    // A shortcut action gets its draft row under the compact main row.
+    if let Some(edit) = s.shortcut_edits.get(&button) {
+        let error = s.chord_errors.get(&button).cloned();
+        let mut draft = col()
+            .key(format!("shortcut-{pick_key}"))
+            .w_full()
+            .gap(space::S1)
+            .px(CARD_PAD_X * sc)
+            .pb(space::S3);
+        draft = draft.child(
+            TextInput::new(edit)
+                .placeholder("Ctrl+Alt+F5")
+                .width(Some(field_w))
+                .invalid(error.is_some())
+                .on_edit(move |s: &mut AppState| match s.shortcut_edits.get_mut(&button) {
+                    Some(edit) => edit,
+                    None => panic!("shortcut draft exists for edited button"),
+                })
+                .on_change(move |s: &mut AppState, _: &mut Tx| s.shortcut_edited(button))
+                .build(k),
+        );
+        if let Some(why) = error {
             draft = draft.child(
-                TextInput::new(edit)
-                    .placeholder("Ctrl+Alt+F5")
-                    .width(Some(field_w))
-                    .invalid(error.is_some())
-                    .on_edit(
-                        move |s: &mut AppState| match s.shortcut_edits.get_mut(&edit_key) {
-                            Some(edit) => edit,
-                            None => panic!("shortcut draft exists for edited slot"),
-                        },
-                    )
-                    .on_change(move |s: &mut AppState, _: &mut Tx| s.shortcut_edited(button, slot))
-                    .build(k),
+                text(why)
+                    .key(format!("chord-error-{pick_key}"))
+                    .font(FOOTNOTE)
+                    .color(k.c.danger.fg),
             );
-            if let Some(why) = error {
-                draft = draft.child(
-                    text(why)
-                        .key(format!("chord-error-{pick_key}"))
-                        .font(FOOTNOTE)
-                        .color(k.c.danger.fg),
-                );
-            }
-            drafts.push(draft);
         }
+        drafts.push(draft);
     }
 
     // The card: the compact row, then a hairline divider and a row per draft.
@@ -1048,7 +1027,7 @@ fn buttons_section(s: &AppState, k: &Kit, layer: &mut Vec<El>) -> El {
         "buttons",
         s.tr("Buttons"),
         s.tr(
-            "Pick what each press, double press and long press does. Changes persist immediately \
+            "Pick what each button does. A double press or long press fires the same action. Changes persist immediately \
          and update the capture set.",
         ),
         k,

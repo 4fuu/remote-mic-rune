@@ -11,7 +11,7 @@ use rc_protocol::{ALL_BUTTONS, RemoteButton};
 
 use crate::bridge_api::{BridgeStatus, SharedBridge, SharedEngine, UiNotice};
 use crate::i18n::{tr, tr_fmt, Lang, Language};
-use crate::mappings::{ButtonAction, MediaKey, MouseButton, Slot};
+use crate::mappings::{ButtonAction, MediaKey, MouseButton};
 use crate::settings::AppSettings;
 use crate::task::TaskStatus;
 
@@ -40,7 +40,7 @@ pub fn picker_options(lang: Lang) -> [&'static str; 11] {
 }
 
 /// The action [`picker_options`]' index stands for. Index 0 (`Disabled`)
-/// maps to None: the slot is cleared. Indexes past the list cannot occur
+/// maps to None: the action is cleared. Indexes past the list cannot occur
 /// from a picker (the kit only hands back shown options), and callers treat
 /// unknown choices as "leave the mapping untouched".
 pub fn action_for_picker_index(index: usize) -> Option<ButtonAction> {
@@ -169,11 +169,6 @@ fn take_startup() -> Startup {
     }
 }
 
-/// Per-slot UI editor key (shortcut drafts and chord errors).
-pub(crate) fn slot_key(button: RemoteButton, slot: Slot) -> u8 {
-    (button.ordinal() * 4 + slot.index() as u32) as u8
-}
-
 /// Helper task commands the Helper section's buttons run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HelperCommand {
@@ -206,11 +201,11 @@ pub struct AppState {
     pub ui: Option<AppHandle<AppState>>,
     /// Which action picker popover is open (its key), one at a time.
     pub open_picker: Option<String>,
-    /// Shortcut chord drafts per slot key, created when a slot picks
+    /// Shortcut chord drafts per button, created when the button's action is
     /// `Shortcut`; editing parses and persists immediately.
-    pub shortcut_edits: BTreeMap<u8, TextEdit>,
-    /// Parse errors per slot key, shown under the draft field.
-    pub chord_errors: BTreeMap<u8, String>,
+    pub shortcut_edits: BTreeMap<RemoteButton, TextEdit>,
+    /// Parse errors per button, shown under the draft field.
+    pub chord_errors: BTreeMap<RemoteButton, String>,
     /// Latest helper task status (`--task-status` / schtasks fallback).
     pub task_status: Option<TaskStatus>,
     /// Last helper command result line.
@@ -295,21 +290,18 @@ impl AppState {
         tr(self.lang, key)
     }
 
-    /// Pre-creates a shortcut draft for every slot already holding a
+    /// Pre-creates a shortcut draft for every button already holding a
     /// `Shortcut` action, so its text field shows the chord at once.
     fn seed_shortcut_drafts(&mut self) {
-        let mut existing: Vec<(RemoteButton, Slot, Vec<crate::mappings::VKey>)> = Vec::new();
+        let mut existing: Vec<(RemoteButton, Vec<crate::mappings::VKey>)> = Vec::new();
         for button in ALL_BUTTONS {
-            for slot in [Slot::Single, Slot::Double, Slot::Long] {
-                if let Some(ButtonAction::Shortcut { chord }) = self.settings.mappings.slot_action(button, slot) {
-                    existing.push((button, slot, chord.clone()));
-                }
+            if let Some(ButtonAction::Shortcut { chord }) = self.settings.mappings.action_for(button) {
+                existing.push((button, chord.clone()));
             }
         }
-        for (button, slot, chord) in existing {
-            let key = slot_key(button, slot);
+        for (button, chord) in existing {
             self.shortcut_edits
-                .entry(key)
+                .entry(button)
                 .or_insert_with(|| TextEdit::new(crate::chord::format_chord(&chord)));
         }
     }
@@ -371,39 +363,38 @@ impl AppState {
         self.persist();
     }
 
-    /// One picker choose: update the mapping, keep the shortcut draft in
-    /// sync, persist and push everything downstream. `choice` is the display
-    /// string of an option in [`picker_options`] (the kit hands it back);
-    /// its position in this language's list picks the action, so an unknown
-    /// or stale choice leaves the mapping untouched.
-    pub fn choose_action(&mut self, button: RemoteButton, slot: Slot, choice: &str) {
+    /// One picker choose: update the button's action, keep the shortcut
+    /// draft in sync, persist and push everything downstream. `choice` is
+    /// the display string of an option in [`picker_options`] (the kit hands
+    /// it back); its position in this language's list picks the action, so an
+    /// unknown or stale choice leaves the mapping untouched.
+    pub fn choose_action(&mut self, button: RemoteButton, choice: &str) {
         let Some(index) = picker_options(self.lang).iter().position(|o| *o == choice) else {
             return;
         };
-        let key = slot_key(button, slot);
         match action_for_picker_index(index) {
             None => {
-                self.settings.mappings.set_slot_action(button, slot, None);
-                self.shortcut_edits.remove(&key);
-                self.chord_errors.remove(&key);
+                self.settings.mappings.set_action(button, None);
+                self.shortcut_edits.remove(&button);
+                self.chord_errors.remove(&button);
             }
             Some(ButtonAction::Shortcut { .. }) => {
-                let chord = match self.settings.mappings.slot_action(button, slot) {
+                let chord = match self.settings.mappings.action_for(button) {
                     Some(ButtonAction::Shortcut { chord }) => chord.clone(),
                     _ => Vec::new(),
                 };
                 self.shortcut_edits
-                    .entry(key)
+                    .entry(button)
                     .or_insert_with(|| TextEdit::new(crate::chord::format_chord(&chord)));
-                self.chord_errors.remove(&key);
+                self.chord_errors.remove(&button);
                 self.settings
                     .mappings
-                    .set_slot_action(button, slot, Some(ButtonAction::Shortcut { chord }));
+                    .set_action(button, Some(ButtonAction::Shortcut { chord }));
             }
             Some(action) => {
-                self.settings.mappings.set_slot_action(button, slot, Some(action));
-                self.shortcut_edits.remove(&key);
-                self.chord_errors.remove(&key);
+                self.settings.mappings.set_action(button, Some(action));
+                self.shortcut_edits.remove(&button);
+                self.chord_errors.remove(&button);
             }
         }
         self.after_mappings_change();
@@ -411,20 +402,19 @@ impl AppState {
 
     /// The shortcut draft field changed: parse and persist when valid, flag
     /// the error (leaving the last valid chord in place) when not.
-    pub fn shortcut_edited(&mut self, button: RemoteButton, slot: Slot) {
-        let key = slot_key(button, slot);
-        let Some(edit) = self.shortcut_edits.get(&key) else { return };
+    pub fn shortcut_edited(&mut self, button: RemoteButton) {
+        let Some(edit) = self.shortcut_edits.get(&button) else { return };
         let draft = edit.text.clone();
         match crate::chord::parse_chord(self.lang, &draft) {
             Ok(chord) => {
-                self.chord_errors.remove(&key);
+                self.chord_errors.remove(&button);
                 self.settings
                     .mappings
-                    .set_slot_action(button, slot, Some(ButtonAction::Shortcut { chord }));
+                    .set_action(button, Some(ButtonAction::Shortcut { chord }));
                 self.after_mappings_change();
             }
             Err(why) => {
-                self.chord_errors.insert(key, why);
+                self.chord_errors.insert(button, why);
             }
         }
     }
@@ -644,9 +634,8 @@ mod tests {
 
     fn mappings_with_shortcut() -> ButtonMappings {
         let mut m = ButtonMappings::default();
-        m.set_slot_action(
+        m.set_action(
             RemoteButton::Home,
-            Slot::Single,
             Some(ButtonAction::Shortcut { chord: vec![vk::CONTROL, vk::F5] }),
         );
         m
@@ -664,7 +653,7 @@ mod tests {
     #[test]
     fn picker_options_round_trip_to_actions() {
         // The option order is the action identity, in every language.
-        assert_eq!(action_for_picker_index(0), None, "Disabled clears the slot");
+        assert_eq!(action_for_picker_index(0), None, "Disabled clears the action");
         assert_eq!(
             action_for_picker_index(7),
             Some(ButtonAction::Shortcut { chord: vec![] })
@@ -701,20 +690,16 @@ mod tests {
     fn choosing_a_chinese_label_selects_the_action() {
         let mut s = AppState::for_test(AppSettings::default());
         s.lang = Lang::Zh;
-        s.choose_action(RemoteButton::Ok, Slot::Double, "媒体：静音");
+        s.choose_action(RemoteButton::Ok, "媒体：静音");
         assert_eq!(
-            s.settings
-                .mappings
-                .slot_action(RemoteButton::Ok, Slot::Double),
+            s.settings.mappings.action_for(RemoteButton::Ok),
             Some(&ButtonAction::MediaKey {
                 key: MediaKey::Mute
             })
         );
-        s.choose_action(RemoteButton::Ok, Slot::Double, "快捷键");
+        s.choose_action(RemoteButton::Ok, "快捷键");
         assert_eq!(
-            s.settings
-                .mappings
-                .slot_action(RemoteButton::Ok, Slot::Double),
+            s.settings.mappings.action_for(RemoteButton::Ok),
             Some(&ButtonAction::Shortcut { chord: vec![] })
         );
     }
@@ -729,11 +714,9 @@ mod tests {
             engine: Some(Arc::clone(&engine) as SharedEngine),
         };
 
-        s.choose_action(RemoteButton::Ok, Slot::Double, "Media: Play");
+        s.choose_action(RemoteButton::Ok, "Media: Play");
         assert_eq!(
-            s.settings
-                .mappings
-                .slot_action(RemoteButton::Ok, Slot::Double),
+            s.settings.mappings.action_for(RemoteButton::Ok),
             Some(&ButtonAction::MediaKey {
                 key: MediaKey::PlayPause
             })
@@ -749,23 +732,21 @@ mod tests {
     }
 
     #[test]
-    fn choosing_disabled_clears_the_slot() {
+    fn choosing_disabled_clears_the_action() {
         let mut s = AppState::for_test(settings_with_mappings());
-        s.choose_action(RemoteButton::Home, Slot::Single, "Disabled");
-        assert_eq!(s.settings.mappings.slot_action(RemoteButton::Home, Slot::Single), None);
+        s.choose_action(RemoteButton::Home, "Disabled");
+        assert_eq!(s.settings.mappings.action_for(RemoteButton::Home), None);
         assert!(!s.settings.mappings.buttons.contains_key(RemoteButton::Home.name()));
     }
 
     #[test]
     fn choosing_an_unknown_option_leaves_the_mapping_alone() {
         let mut s = AppState::for_test(settings_with_mappings());
-        // A stale option (language switched mid-gesture, hand-driven call)
+        // A stale option (language switched mid-edit, hand-driven call)
         // must not wipe the mapping.
-        s.choose_action(RemoteButton::Home, Slot::Single, "不存在");
+        s.choose_action(RemoteButton::Home, "不存在");
         assert_eq!(
-            s.settings
-                .mappings
-                .slot_action(RemoteButton::Home, Slot::Single),
+            s.settings.mappings.action_for(RemoteButton::Home),
             Some(&ButtonAction::Shortcut {
                 chord: vec![vk::CONTROL, vk::F5]
             })
@@ -776,24 +757,26 @@ mod tests {
     fn shortcut_drafts_parse_persist_and_flag_errors() {
         let mut s = AppState::for_test(AppSettings::default());
         // Picking Shortcut creates the draft field.
-        s.choose_action(RemoteButton::Back, Slot::Long, "Shortcut");
-        let key = slot_key(RemoteButton::Back, Slot::Long);
-        assert!(s.shortcut_edits.contains_key(&key));
+        s.choose_action(RemoteButton::Back, "Shortcut");
+        assert!(s.shortcut_edits.contains_key(&RemoteButton::Back));
 
-        s.shortcut_edits.get_mut(&key).unwrap().text = "ctrl+alt+f9".to_string();
-        s.shortcut_edited(RemoteButton::Back, Slot::Long);
+        s.shortcut_edits.get_mut(&RemoteButton::Back).unwrap().text = "ctrl+alt+f9".to_string();
+        s.shortcut_edited(RemoteButton::Back);
         assert_eq!(
-            s.settings.mappings.slot_action(RemoteButton::Back, Slot::Long),
+            s.settings.mappings.action_for(RemoteButton::Back),
             Some(&ButtonAction::Shortcut { chord: vec![vk::CONTROL, vk::MENU, VKey(0x78)] })
         );
-        assert!(!s.chord_errors.contains_key(&key));
+        assert!(!s.chord_errors.contains_key(&RemoteButton::Back));
 
-        s.shortcut_edits.get_mut(&key).unwrap().text = "ctrl+".to_string();
-        s.shortcut_edited(RemoteButton::Back, Slot::Long);
-        assert!(s.chord_errors.contains_key(&key), "invalid input flags an error");
+        s.shortcut_edits.get_mut(&RemoteButton::Back).unwrap().text = "ctrl+".to_string();
+        s.shortcut_edited(RemoteButton::Back);
+        assert!(
+            s.chord_errors.contains_key(&RemoteButton::Back),
+            "invalid input flags an error"
+        );
         // The last valid chord survives the invalid edit.
         assert_eq!(
-            s.settings.mappings.slot_action(RemoteButton::Back, Slot::Long),
+            s.settings.mappings.action_for(RemoteButton::Back),
             Some(&ButtonAction::Shortcut { chord: vec![vk::CONTROL, vk::MENU, VKey(0x78)] })
         );
     }
@@ -803,8 +786,7 @@ mod tests {
         // for_test mirrors from_startup's draft seeding, so a preconfigured
         // shortcut already has its text field content.
         let s = AppState::for_test(settings_with_mappings());
-        let key = slot_key(RemoteButton::Home, Slot::Single);
-        assert_eq!(s.shortcut_edits[&key].text, "Ctrl+F5");
+        assert_eq!(s.shortcut_edits[&RemoteButton::Home].text, "Ctrl+F5");
     }
 
     #[test]
@@ -976,13 +958,20 @@ mod tests {
             );
             // kit Select keys its trigger element `{key}-trigger`.
             assert!(
-                rt.find(&format!("pick-{}-single-trigger", button.name())).is_some(),
-                "single picker for {} renders",
+                rt.find(&format!("pick-{}-trigger", button.name())).is_some(),
+                "action picker for {} renders",
                 button.name()
             );
+            for old in ["double", "long", "repeat"] {
+                assert!(
+                    rt.find(&format!("pick-{}-{old}-trigger", button.name())).is_none(),
+                    "{} still has a {old} picker",
+                    button.name()
+                );
+            }
         }
         // The preconfigured shortcut got a draft field.
-        assert!(rt.find("shortcut-pick-home-single").is_some(), "shortcut field renders");
+        assert!(rt.find("shortcut-pick-home").is_some(), "shortcut field renders");
 
         // Geometry: every placed card sits fully inside the mapping canvas,
         // and the cards of each column never overlap (the canvas height is
