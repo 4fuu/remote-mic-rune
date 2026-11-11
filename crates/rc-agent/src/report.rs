@@ -293,6 +293,17 @@ pub fn apply_frame_counters(stats: &mut AgentStats, d: &FrameDecision) {
     }
 }
 
+/// Fold the plan's edge into the tracked absolute pressed set. The edge
+/// payload IS the next absolute set; committing it keeps the following
+/// frame's diff honest. Without the commit, a release frame compares
+/// against a stale set, reports "no change", never reaches the bridge —
+/// and the next press of the same key then diffs to nothing there.
+pub fn apply_frame_pressed(pressed: &mut Vec<u16>, d: &FrameDecision) {
+    if let Some(next) = &d.edge {
+        *pressed = next.clone();
+    }
+}
+
 /// The write landed and verified: count it, and count a synthesis hit.
 pub fn apply_write_ok(stats: &mut AgentStats, synth_changed: bool) {
     stats.clears_ok += 1;
@@ -513,6 +524,41 @@ mod tests {
         assert_eq!(edge_changed(&[0x00F1], &[0x00F1]), None);
         assert_eq!(edge_changed(&[], &[0x00F1]), Some(vec![0x00F1]));
         assert_eq!(edge_changed(&[0x00F1, 0x0080], &[0x00F1]), Some(vec![0x00F1]));
+    }
+
+    #[test]
+    fn pressed_commits_each_edge_so_repressing_the_same_key_fires() {
+        // The bug this pins: the hook reported the edge but never committed
+        // the payload back into the tracked pressed set. The release frame
+        // then compared against a stale set, looked like "no change" and
+        // never reached the bridge — which kept the key down, so the next
+        // press of the SAME key diffed to nothing and the shortcut died.
+        let press = report_with([0x00F1, 0, 0]);
+        let zero = report_with([0, 0, 0]);
+        let mut pressed: Vec<u16> = Vec::new();
+
+        // press: [] -> [back]
+        let d = plan_frame(&base_inp(&press, &pressed, false, true));
+        assert_eq!(d.edge, Some(vec![0x00F1]));
+        apply_frame_pressed(&mut pressed, &d);
+
+        // release: [back] -> [] must still be a change (the E line the
+        // bridge needs to lift the key)
+        let d = plan_frame(&base_inp(&zero, &pressed, false, true));
+        assert_eq!(d.edge, Some(vec![]));
+        apply_frame_pressed(&mut pressed, &d);
+
+        // re-press the same key: a change again, so the bridge derives a
+        // fresh Press
+        let d = plan_frame(&base_inp(&press, &pressed, false, true));
+        assert_eq!(d.edge, Some(vec![0x00F1]));
+        apply_frame_pressed(&mut pressed, &d);
+
+        // held repeat frames stay "no change": no edge spam while down
+        let d = plan_frame(&base_inp(&press, &pressed, false, true));
+        assert_eq!(d.edge, None);
+        apply_frame_pressed(&mut pressed, &d);
+        assert_eq!(pressed, vec![0x00F1]);
     }
 
     #[test]

@@ -82,8 +82,8 @@ mod imp {
     use crate::frames::{EnterFrame, FrameStack};
     use crate::logging;
     use crate::report::{
-        apply_frame_counters, apply_restore_outcome, apply_write_fail, apply_write_ok, plan_frame,
-        restore_decision, FrameInputs, LeaveAction, SynthFrame,
+        apply_frame_counters, apply_frame_pressed, apply_restore_outcome, apply_write_fail,
+        apply_write_ok, plan_frame, restore_decision, FrameInputs, LeaveAction, SynthFrame,
     };
     use crate::runtime::{lock_ok, RUNTIME};
     use crate::transport;
@@ -236,6 +236,7 @@ mod imp {
                 core.synth_held = false;
             }
             apply_frame_counters(&mut core.stats, &d);
+            apply_frame_pressed(&mut core.pressed, &d);
             let edge_msg = d.edge.clone().map(|usages| AgentToHelper::Edge {
                 t: unix_ms(),
                 usages,
