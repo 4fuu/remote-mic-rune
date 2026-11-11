@@ -147,6 +147,82 @@ pub trait MappingEngineHandle: Send + Sync + 'static {
     fn replace_mappings(&self, mappings: &ButtonMappings);
 }
 
+/// UI-facing mirror of `rc_voice::VoiceSnapshot` (connection phase, audio
+/// device list, streaming state). Kept as a plain enum + fields so ui.rs and
+/// views.rs never import rc-voice types, matching the seam above.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct VoiceStatus {
+    pub enabled: bool,
+    pub phase: VoicePhase,
+    /// Human detail for the phase: remote name, wait seconds, failure text.
+    pub detail: String,
+    pub streaming: bool,
+    pub battery: Option<u8>,
+    pub samples: u64,
+    pub devices: Vec<String>,
+    pub selected: Option<String>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum VoicePhase {
+    #[default]
+    Stopped,
+    Scanning,
+    Connecting,
+    Initializing,
+    Ready,
+    WaitingReconnect,
+    Failed,
+}
+
+impl VoiceStatus {
+    /// Convert the rc-voice snapshot (the only place rc-app touches the
+    /// crate's types outside `voice.rs`).
+    pub fn from_runtime(snapshot: rc_voice::VoiceSnapshot) -> Self {
+        let (phase, detail) = match snapshot.status {
+            rc_voice::BleStatus::Stopped => (VoicePhase::Stopped, String::new()),
+            rc_voice::BleStatus::Scanning => (VoicePhase::Scanning, String::new()),
+            rc_voice::BleStatus::Connecting(name) => (VoicePhase::Connecting, name),
+            rc_voice::BleStatus::Initializing(name) => (VoicePhase::Initializing, name),
+            rc_voice::BleStatus::Ready(name) => (VoicePhase::Ready, name),
+            rc_voice::BleStatus::WaitingReconnect { seconds } => {
+                (VoicePhase::WaitingReconnect, seconds.to_string())
+            }
+            rc_voice::BleStatus::Failed(message) => (VoicePhase::Failed, message),
+        };
+        Self {
+            enabled: snapshot.enabled,
+            phase,
+            detail,
+            streaming: snapshot.streaming,
+            battery: snapshot.battery,
+            samples: snapshot.samples,
+            devices: snapshot.devices,
+            selected: snapshot.selected,
+            last_error: snapshot.last_error,
+        }
+    }
+}
+
+/// What rc-app needs from the voice bridge runtime (rc-voice).
+pub trait VoiceService: Send + Sync + 'static {
+    /// Start or stop the BLE voice session task.
+    fn set_enabled(&self, enabled: bool);
+    /// Choose the virtual audio device play endpoint (None = none).
+    fn select_output(&self, name: Option<String>);
+    /// Adjust post-decode gain (dB); clamped to ±24.
+    fn set_gain(&self, gain_db: f32);
+    /// Force a BLE reconnect.
+    fn reconnect(&self);
+    /// Re-enumerate audio output devices.
+    fn refresh_devices(&self);
+    /// Play the test tone on the selected endpoint.
+    fn test_tone(&self);
+    /// One consistent snapshot of voice bridge state.
+    fn snapshot(&self) -> VoiceStatus;
+}
+
 /// Updates the pump thread forwards to the UI thread.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UiNotice {
@@ -154,6 +230,8 @@ pub enum UiNotice {
     Status(BridgeStatus),
     /// Pressed-state mask by button ordinal, for the per-row indicators.
     PressedChanged(u64),
+    /// A fresh [`VoiceStatus`] snapshot (from the voice runtime thread).
+    Voice(VoiceStatus),
     /// The pump gave up (channel closed, engine poisoned); app should show it.
     Fatal(String),
 }
@@ -161,3 +239,4 @@ pub enum UiNotice {
 /// Shared handle types the UI and pump hold.
 pub type SharedBridge = Arc<dyn BridgeHandle>;
 pub type SharedEngine = Arc<dyn MappingEngineHandle>;
+pub type SharedVoice = Arc<dyn VoiceService>;

@@ -9,7 +9,7 @@ use rune::{AppHandle, TextEdit, Tx};
 
 use rc_protocol::{ALL_BUTTONS, RemoteButton};
 
-use crate::bridge_api::{BridgeStatus, SharedBridge, SharedEngine, UiNotice};
+use crate::bridge_api::{BridgeStatus, SharedBridge, SharedEngine, SharedVoice, UiNotice, VoiceStatus};
 use crate::i18n::{tr, tr_fmt, Lang, Language};
 use crate::mappings::{ButtonAction, MediaKey, MouseButton};
 use crate::settings::AppSettings;
@@ -124,6 +124,7 @@ impl Section {
 pub struct Services {
     pub bridge: Option<SharedBridge>,
     pub engine: Option<SharedEngine>,
+    pub voice: Option<SharedVoice>,
 }
 
 /// What main.rs hands the app before `init()` runs (`fn() -> S` cannot take
@@ -197,6 +198,8 @@ pub struct AppState {
     pub bridge: BridgeStatus,
     /// Pressed-state mask by button ordinal, from pump notices.
     pub pressed: u64,
+    /// Live voice bridge state, from the voice runtime's notices.
+    pub voice: VoiceStatus,
     pub services: Services,
     pub ui: Option<AppHandle<AppState>>,
     /// Which action picker popover is open (its key), one at a time.
@@ -235,6 +238,7 @@ impl AppState {
             settings,
             settings_dir: None,
             section: Section::Status,
+            voice: VoiceStatus::default(),
             warning: None,
             launch_error: None,
             bridge: BridgeStatus::default(),
@@ -268,6 +272,12 @@ impl AppState {
             launch_error: startup.launch_error,
             bridge: startup.bridge_status,
             pressed: 0,
+            voice: startup
+                .services
+                .voice
+                .as_ref()
+                .map(|voice| voice.snapshot())
+                .unwrap_or_default(),
             services: startup.services,
             ui: startup.ui,
             open_picker: None,
@@ -311,6 +321,7 @@ impl AppState {
         match notice {
             UiNotice::Status(status) => self.bridge = status,
             UiNotice::PressedChanged(mask) => self.pressed = mask,
+            UiNotice::Voice(status) => self.voice = status,
             UiNotice::Fatal(message) => self.launch_error = Some(message),
         }
     }
@@ -352,6 +363,37 @@ impl AppState {
         self.persist();
         if let Some(bridge) = &self.services.bridge {
             bridge.set_voice_synth(to);
+        }
+    }
+
+    /// The voice bridge master switch: persist and tell the runtime to
+    /// start/stop the BLE session task.
+    pub fn set_voice_enabled(&mut self, enabled: bool) {
+        self.settings.voice.enabled = enabled;
+        self.persist();
+        self.voice.enabled = enabled;
+        if let Some(voice) = &self.services.voice {
+            voice.set_enabled(enabled);
+        }
+    }
+
+    /// The voice bridge output endpoint: persist and switch the audio
+    /// stream. None keeps the bridge from accepting voice sessions.
+    pub fn set_voice_output(&mut self, name: Option<String>) {
+        self.settings.voice.output_device = name.clone();
+        self.persist();
+        if let Some(voice) = &self.services.voice {
+            voice.select_output(name);
+        }
+    }
+
+    /// The voice bridge post-decode gain in dB (clamped to ±24 by the
+    /// runtime). Persisted so the level survives restarts.
+    pub fn set_voice_gain(&mut self, gain_db: f32) {
+        self.settings.voice.gain_db = gain_db;
+        self.persist();
+        if let Some(voice) = &self.services.voice {
+            voice.set_gain(gain_db);
         }
     }
 
@@ -584,12 +626,14 @@ mod tests {
         settings.window.dark = Some(false); // the SwiftUI-style light look
         settings.capture_enabled = true;
         settings.language = snapshot_lang;
+        settings.voice.enabled = true;
         // `buttons` renders narrow (the scale-down regression case) and
         // `buttons-wide` at the window the app now opens at: cards pin to the
         // content edges, the photo stays centered, sizes stay at scale 1.
         for (name, section, win_w) in [
             ("status", Section::Status, 780.0),
             ("capture", Section::Capture, 780.0),
+            ("capture-voice", Section::Capture, 780.0),
             ("buttons", Section::Buttons, 780.0),
             ("helper", Section::Helper, 780.0),
             ("settings", Section::Settings, 780.0),
@@ -597,6 +641,23 @@ mod tests {
         ] {
             let mut state = AppState::for_test(settings.clone());
             state.section = section;
+            if name == "capture-voice" {
+                // A realistic live bridge: connected remote, routed output.
+                state.voice = crate::bridge_api::VoiceStatus {
+                    enabled: true,
+                    phase: crate::bridge_api::VoicePhase::Ready,
+                    detail: "Mi Remote (RC003)".into(),
+                    streaming: true,
+                    battery: Some(80),
+                    samples: 128_640,
+                    devices: vec![
+                        "CABLE Input (VB-Audio Virtual Cable)".into(),
+                        "Speakers (Realtek High Definition Audio)".into(),
+                    ],
+                    selected: Some("CABLE Input (VB-Audio Virtual Cable)".into()),
+                    last_error: Some("示例：音频桥接目标不可用，语音数据已丢弃".into()),
+                };
+            }
             state.bridge = BridgeStatus {
                 phase: BridgePhase::Listening,
                 helper_pid: Some(4812),
@@ -605,9 +666,12 @@ mod tests {
             };
             // The mapping canvas is fixed geometry: render it in a window
             // tall enough to show the whole canvas (intro, the canvas itself,
-            // and the volume_mute card below it).
+            // and the volume_mute card below it). `capture-voice` shows the
+            // whole Capture page including the voice bridge section.
             let win_h = if section == Section::Buttons {
                 crate::views::mapping_canvas_h(&state) + 290.0
+            } else if name == "capture-voice" {
+                1220.0
             } else {
                 720.0
             };
@@ -712,6 +776,7 @@ mod tests {
         s.services = Services {
             bridge: Some(Arc::clone(&bridge) as SharedBridge),
             engine: Some(Arc::clone(&engine) as SharedEngine),
+            voice: None,
         };
 
         s.choose_action(RemoteButton::Ok, "Media: Play");
@@ -1121,6 +1186,31 @@ mod tests {
         rt.frame(0.0);
         assert!(rt.find("error-overlay").is_some(), "the conflict overlay renders");
         assert!(rt.find("error-exit").is_some(), "the Exit button renders");
+    }
+
+    #[test]
+    fn capture_page_renders_the_voice_bridge_section() {
+        if !ui_enabled() {
+            eprintln!("skipping: set RC_APP_UI_TESTS=1 with a GPU present");
+            return;
+        }
+        let mut state = AppState::for_test(AppSettings::default());
+        state.section = Section::Capture;
+        state.voice.devices = vec!["CABLE Input (VB-Audio Virtual Cable)".into()];
+        state.voice.selected = Some("CABLE Input (VB-Audio Virtual Cable)".into());
+        let mut rt = rune::Runtime::new(state, view, (760.0, 680.0), rune::Env::new(true, 1.0));
+        rt.frame(0.0);
+        rt.frame(1.0 / 60.0);
+        // Selects register their key only while open (the snapshot run
+        // inspects the pickers visually instead); these are always laid out.
+        for key in [
+            "voice-switch",
+            "voice-test-tone",
+            "voice-reconnect",
+            "kv-voice-status-value",
+        ] {
+            assert!(rt.find(key).is_some(), "the voice section shows {key}");
+        }
     }
 
     #[test]

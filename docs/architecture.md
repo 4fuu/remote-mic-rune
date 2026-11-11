@@ -115,7 +115,8 @@ DACL, is the access control.
 | `crates/rc-helper` | bin | Registry scan and exclusive-host verdict, DLL injection, lease renewal, agent↔app relay, scheduled task management, device-node recovery, CLI for staged verification. |
 | `crates/rc-bridge` | lib | App-side link endpoint: pipe server, token auth, per-generation ownership, watchdogs, snapshot for the UI. |
 | `crates/rc-mapping` | lib | Per-button action model (shortcuts/media/mouse), SendInput injector. |
-| `crates/rc-app` | bin | Rune UI shell: five sections (Status/Capture/Buttons/Helper/Settings), settings persistence, engine pump, tray. |
+| `crates/rc-voice` | lib | The remote's ATVV microphone bridge: WinRT BLE GATT session, IMA/DVI ADPCM decode, PCM into a user-chosen virtual audio device. Ported from the hardware-verified `xiaomi-remote-mic`; protocol layer and session state machine are pure, backend cfg-gated. |
+| `crates/rc-app` | bin | Rune UI shell: five sections (Status/Capture/Buttons/Helper/Settings), voice bridge settings, settings persistence, engine pump, tray. |
 
 Dependency direction is strict: `rc-protocol` depends on nothing internal;
 `rc-agent`, `rc-bridge`, `rc-mapping`, `rc-helper` depend on `rc-protocol`;

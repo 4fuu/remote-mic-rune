@@ -15,7 +15,7 @@ use rc_protocol::{RemoteButton, ALL_BUTTONS};
 
 use crate::bridge_api::{
     BridgeCounters, BridgeHandle, BridgePhase, BridgeStatus, EngineEvent, MappingEngineHandle,
-    StartError,
+    StartError, VoiceService, VoiceStatus,
 };
 
 #[cfg(test)]
@@ -176,6 +176,77 @@ impl MappingEngineHandle for StubEngine {
 
     fn replace_mappings(&self, mappings: &ButtonMappings) {
         self.state.lock().unwrap().mappings = Some(mappings.clone());
+    }
+}
+
+/// In-memory voice bridge state the stub records into.
+struct StubVoiceState {
+    enabled: Option<bool>,
+    output: Option<Option<String>>,
+    gain: Option<f32>,
+    tones: u32,
+    refreshes: u32,
+}
+
+/// Stand-in for the real voice runtime (`--demo` mode and host tests): the
+/// voice section renders and its actions record, but no bridge runs.
+pub struct StubVoice {
+    state: std::sync::Mutex<StubVoiceState>,
+}
+
+impl StubVoice {
+    pub fn new() -> Arc<StubVoice> {
+        Arc::new(StubVoice {
+            state: std::sync::Mutex::new(StubVoiceState {
+                enabled: None,
+                output: None,
+                gain: None,
+                tones: 0,
+                refreshes: 0,
+            }),
+        })
+    }
+}
+
+impl Default for StubVoice {
+    fn default() -> Self {
+        Self {
+            state: std::sync::Mutex::new(StubVoiceState {
+                enabled: None,
+                output: None,
+                gain: None,
+                tones: 0,
+                refreshes: 0,
+            }),
+        }
+    }
+}
+
+impl VoiceService for StubVoice {
+    fn set_enabled(&self, enabled: bool) {
+        self.state.lock().unwrap().enabled = Some(enabled);
+    }
+
+    fn select_output(&self, name: Option<String>) {
+        self.state.lock().unwrap().output = Some(name);
+    }
+
+    fn set_gain(&self, gain_db: f32) {
+        self.state.lock().unwrap().gain = Some(gain_db);
+    }
+
+    fn reconnect(&self) {}
+
+    fn refresh_devices(&self) {
+        self.state.lock().unwrap().refreshes += 1;
+    }
+
+    fn test_tone(&self) {
+        self.state.lock().unwrap().tones += 1;
+    }
+
+    fn snapshot(&self) -> VoiceStatus {
+        VoiceStatus::default()
     }
 }
 

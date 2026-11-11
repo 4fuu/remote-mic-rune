@@ -65,7 +65,8 @@ behaves like a plain keyboard again — no stuck keys, nothing left armed.
 | `crates/rc-helper` | bin | Elevated helper: locate the exclusive host, inject, renew the lease, bridge agent↔app, scheduled task, device-node recovery. |
 | `crates/rc-bridge` | lib | App-side link endpoint: pipe server, token auth, per-generation key ownership, watchdogs. |
 | `crates/rc-mapping` | lib | Per-button action model + SendInput injection. |
-| `crates/rc-app` | bin | Rune UI shell: status, capture control, mapping canvas, helper task, settings. |
+| `crates/rc-voice` | lib | ATVV voice bridge: BLE GATT session, IMA/DVI ADPCM decode, PCM into a virtual audio device. Windows backend cfg-gated. |
+| `crates/rc-app` | bin | Rune UI shell: status, capture control, mapping canvas, voice bridge, helper task, settings. |
 
 ## Quick start
 

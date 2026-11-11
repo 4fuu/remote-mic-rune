@@ -23,13 +23,14 @@ mod task;
 mod tray;
 mod ui;
 mod views;
+mod voice;
 
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, mpsc};
 
 use rune::{App, Tx};
 
-use bridge_api::{EngineEvent, SharedBridge, SharedEngine, UiNotice};
+use bridge_api::{EngineEvent, SharedBridge, SharedEngine, SharedVoice, UiNotice};
 use ui::{Services, Startup};
 
 fn main() {
@@ -97,6 +98,23 @@ fn main() {
     .keep_running();
     let handle = app.handle();
 
+    // 4b. The voice bridge (ATVV audio -> virtual device) runs its own
+    //     runtime thread; its notices reach the UI through the same
+    //     handle-update path as the pump's. Demo mode keeps the stub.
+    let voice: SharedVoice = if demo {
+        service::StubVoice::new()
+    } else {
+        voice::RealVoice::start(
+            &loaded.settings.voice,
+            Box::new({
+                let handle = handle.clone();
+                move |notice: UiNotice| {
+                    handle.update(move |s: &mut ui::AppState, _: &mut Tx| s.apply_notice(notice));
+                }
+            }),
+        )
+    };
+
     // Startup data for `init` (fn() -> S cannot take arguments).
     ui::set_startup(Startup {
         settings: loaded.settings,
@@ -107,7 +125,11 @@ fn main() {
             .as_ref()
             .map(|b| b.snapshot())
             .unwrap_or_default(),
-        services: Services { bridge: bridge.clone(), engine: engine.clone() },
+        services: Services {
+            bridge: bridge.clone(),
+            engine: engine.clone(),
+            voice: Some(voice),
+        },
         ui: Some(handle.clone()),
     });
 

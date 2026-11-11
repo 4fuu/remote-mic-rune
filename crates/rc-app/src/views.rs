@@ -617,8 +617,233 @@ fn capture_section(s: &AppState, k: &Kit, layer: &mut Vec<El>) -> El {
                 ),
                 k,
             ),
-        ],
+        ]
+        .into_iter()
+        .chain(voice_section(s, k, layer))
+        .collect(),
     )
+}
+
+/// The voice bridge section on the Capture page: master switch, output
+/// endpoint + gain pickers, test tone, and the live session status.
+fn voice_section(s: &AppState, k: &Kit, layer: &mut Vec<El>) -> Vec<El> {
+    use crate::bridge_api::VoicePhase;
+
+    let master = group(
+        "voice-master",
+        k,
+        vec![row()
+            .key("voice-switch-row")
+            .w_full()
+            .center_y()
+            .gap(space::S3)
+            .px(16.0)
+            .py(space::S3)
+            .child(
+                col()
+                    .grow(1.0)
+                    .gap(space::S1)
+                    .child(
+                        text(s.tr("Voice bridge").to_string())
+                            .font(HEADLINE)
+                            .color(k.c.text_base),
+                    )
+                    .child(
+                        text(s.tr("Streams the remote's microphone into Windows").to_string())
+                            .font(FOOTNOTE)
+                            .color(k.c.text_faint),
+                    ),
+            )
+            .child(
+                Switch::new(s.settings.voice.enabled)
+                    .on_toggle(|s: &mut AppState| {
+                        s.set_voice_enabled(!s.settings.voice.enabled);
+                    })
+                    .build(k)
+                    .key("voice-switch"),
+            )],
+    );
+
+    // The device picker re-enumerates endpoints every time it opens, so a
+    // device plugged in after launch still shows up.
+    let none_label = s.tr("Not selected").to_string();
+    let mut device_options = vec![none_label.clone()];
+    device_options.extend(s.voice.devices.iter().cloned());
+    let current_device = s
+        .voice
+        .selected
+        .clone()
+        .unwrap_or_else(|| none_label.clone());
+    let device_row = row()
+        .key("voice-device-row")
+        .w_full()
+        .center_y()
+        .gap(space::S3)
+        .px(16.0)
+        .py(space::S3)
+        .child(
+            text(s.tr("Output device").to_string())
+                .grow(1.0)
+                .font(HEADLINE)
+                .color(k.c.text_base),
+        )
+        .child(
+            Select::new("voice-device-picker", &device_options)
+                .width(260.0)
+                .current(Some(current_device.as_str()))
+                .open(s.open_picker.as_deref() == Some("voice-device-picker"))
+                .on_toggle(|s: &mut AppState| {
+                    if let Some(voice) = &s.services.voice {
+                        voice.refresh_devices();
+                    }
+                    s.open_picker = match &s.open_picker {
+                        Some(key) if key == "voice-device-picker" => None,
+                        _ => Some("voice-device-picker".to_string()),
+                    }
+                })
+                .on_close(|s: &mut AppState| s.open_picker = None)
+                .on_choose(|s: &mut AppState, choice: &str, _: &mut Tx| {
+                    s.open_picker = None;
+                    let name = if choice == s.tr("Not selected") {
+                        None
+                    } else {
+                        Some(choice.to_string())
+                    };
+                    s.set_voice_output(name);
+                })
+                .build(k, layer),
+        );
+
+    const GAIN_OPTIONS: [f32; 5] = [0.0, 6.0, 10.0, 14.0, 20.0];
+    let gain_labels: Vec<String> = GAIN_OPTIONS.iter().map(|g| format!("{g} dB")).collect();
+    let current_gain = GAIN_OPTIONS
+        .iter()
+        .copied()
+        .min_by(|a, b| {
+            (a - s.settings.voice.gain_db)
+                .abs()
+                .partial_cmp(&(b - s.settings.voice.gain_db).abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|g| format!("{g} dB"))
+        .unwrap_or_else(|| "10 dB".to_string());
+    let gain_refs: Vec<&str> = gain_labels.iter().map(String::as_str).collect();
+    let gain_row = row()
+        .key("voice-gain-row")
+        .w_full()
+        .center_y()
+        .gap(space::S3)
+        .px(16.0)
+        .py(space::S3)
+        .child(
+            text(s.tr("Microphone gain").to_string())
+                .grow(1.0)
+                .font(HEADLINE)
+                .color(k.c.text_base),
+        )
+        .child(
+            Select::new("voice-gain-picker", &gain_refs)
+                .width(120.0)
+                .current(Some(current_gain.as_str()))
+                .open(s.open_picker.as_deref() == Some("voice-gain-picker"))
+                .on_toggle(|s: &mut AppState| {
+                    s.open_picker = match &s.open_picker {
+                        Some(key) if key == "voice-gain-picker" => None,
+                        _ => Some("voice-gain-picker".to_string()),
+                    }
+                })
+                .on_close(|s: &mut AppState| s.open_picker = None)
+                .on_choose(|s: &mut AppState, choice: &str, _: &mut Tx| {
+                    s.open_picker = None;
+                    if let Ok(value) = choice.trim_end_matches(" dB").parse::<f32>() {
+                        s.set_voice_gain(value);
+                    }
+                })
+                .build(k, layer),
+        );
+
+    let test_row = row()
+        .key("voice-test-row")
+        .w_full()
+        .center_y()
+        .gap(space::S3)
+        .px(16.0)
+        .py(space::S3)
+        .child(
+            text(s.tr("Route check").to_string())
+                .grow(1.0)
+                .font(HEADLINE)
+                .color(k.c.text_base),
+        )
+        .child(
+            Button::new(s.tr("Play test tone"))
+                .on_press(|s: &mut AppState| {
+                    if let Some(voice) = &s.services.voice {
+                        voice.test_tone();
+                    }
+                })
+                .build(k)
+                .key("voice-test-tone"),
+        )
+        .child(
+            Button::new(s.tr("Reconnect"))
+                .on_press(|s: &mut AppState| {
+                    if let Some(voice) = &s.services.voice {
+                        voice.reconnect();
+                    }
+                })
+                .build(k)
+                .key("voice-reconnect"),
+        );
+
+    let mut status_value = match s.voice.phase {
+        VoicePhase::Stopped => s.tr("Stopped").to_string(),
+        VoicePhase::Scanning => s.tr("Scanning for the remote").to_string(),
+        VoicePhase::Connecting => tr_fmt!(s.lang, "Connecting ({})", s.voice.detail),
+        VoicePhase::Initializing => tr_fmt!(s.lang, "Initializing ({})", s.voice.detail),
+        VoicePhase::Ready => tr_fmt!(s.lang, "Ready ({})", s.voice.detail),
+        VoicePhase::WaitingReconnect => {
+            tr_fmt!(s.lang, "Reconnecting in {} s", s.voice.detail)
+        }
+        VoicePhase::Failed => tr_fmt!(s.lang, "Failed: {}", s.voice.detail),
+    };
+    if s.voice.streaming {
+        status_value = format!("{} · {}", status_value, s.tr("streaming"));
+    }
+    let battery = s
+        .voice
+        .battery
+        .map(|b| format!("{b} %"))
+        .unwrap_or_else(|| s.tr("Unknown").to_string());
+
+    let mut status_rows = vec![
+        kv_row("voice-status", k, s.tr("Status"), status_value),
+        kv_row("voice-battery", k, s.tr("Battery"), battery),
+        kv_row(
+            "voice-samples",
+            k,
+            s.tr("Decoded samples"),
+            s.voice.samples.to_string(),
+        ),
+    ];
+    if let Some(error) = s.voice.last_error.clone() {
+        status_rows.push(kv_row("voice-error", k, s.tr("Last error"), error));
+    }
+    let status = group("voice-status", k, status_rows);
+
+    vec![
+        group_header(s.tr("Voice bridge"), k),
+        master,
+        group("voice-settings", k, vec![device_row, gain_row, test_row]),
+        status,
+        group_footer(
+            s.tr(
+                "Hold the remote's voice key to talk: audio flows through the virtual device's \
+             play endpoint; the voice application reads the matching recording endpoint.",
+            ),
+            k,
+        ),
+    ]
 }
 
 // -- Buttons: the spatial mapping canvas -------------------------------------

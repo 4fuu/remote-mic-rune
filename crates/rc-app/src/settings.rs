@@ -31,10 +31,36 @@ pub struct AppSettings {
     /// Voice-key synthesis target usage (a key in `VOICE_SYNTHABLE_USAGES`),
     /// or None for off. Invalid values load as off.
     pub voice_synth_to: Option<u16>,
+    /// The ATVV voice bridge (remote microphone audio -> virtual device).
+    pub voice: VoiceSettings,
     pub window: WindowPrefs,
     /// UI language (`System` follows the OS). Files saved before this field
     /// existed load as `System` through the serde default.
     pub language: Language,
+}
+
+/// Voice bridge preferences. `gain_db` follows the hardware-verified
+/// implementation's default (+10 dB); values outside ±24 dB clamp there.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VoiceSettings {
+    /// Whether the BLE voice session task runs.
+    pub enabled: bool,
+    /// The virtual audio device play endpoint name (e.g.
+    /// `CABLE Input (VB-Audio Virtual Cable)`), or None until chosen.
+    pub output_device: Option<String>,
+    /// Post-decode gain in dB.
+    pub gain_db: f32,
+}
+
+impl Default for VoiceSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            output_device: None,
+            gain_db: 10.0,
+        }
+    }
 }
 
 /// Window preferences.
@@ -410,6 +436,38 @@ mod tests {
         let mut ok = AppSettings::default();
         ok.voice_synth_to = Some(0x00E2); // VK_LMENU, in VOICE_SYNTHABLE_USAGES
         assert_eq!(ok.valid_voice_synth(), Some(0x00E2));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn voice_settings_default_when_absent_and_round_trip() {
+        // A settings.json written before the voice bridge existed loads
+        // with the defaults (off, no device, +10 dB) and no warning.
+        let dir = unique_dir("voice-absent");
+        let mut old = sample();
+        save(&dir, &old).unwrap();
+        let on_disk = fs::read_to_string(settings_path(&dir)).unwrap();
+        // Simulate the pre-voice file: drop the field entirely.
+        let mut value: serde_json::Value =
+            serde_json::from_str(&on_disk).expect("saved settings are valid json");
+        value
+            .as_object_mut()
+            .expect("settings root is an object")
+            .remove("voice");
+        fs::write(settings_path(&dir), value.to_string()).unwrap();
+        let loaded = load(&dir);
+        assert_eq!(loaded.settings.voice, VoiceSettings::default());
+        assert_eq!(loaded.warning, None);
+
+        // A configured bridge survives a save/load round trip.
+        old.voice = VoiceSettings {
+            enabled: true,
+            output_device: Some("CABLE Input (VB-Audio Virtual Cable)".into()),
+            gain_db: 14.0,
+        };
+        save(&dir, &old).unwrap();
+        let loaded = load(&dir);
+        assert_eq!(loaded.settings.voice, old.voice);
         fs::remove_dir_all(&dir).ok();
     }
 
