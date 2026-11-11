@@ -6,11 +6,12 @@ members = [
     "crates/rc-bridge",
     "crates/rc-mapping",
     "crates/rc-helper",
+    "crates/rc-voice",
     "crates/rc-app",
 ]
 
 [workspace.package]
-version = "2026.1111.0"
+version = "2026.1111.1"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/4fuu/remote-mic-rune"
