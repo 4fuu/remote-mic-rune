@@ -11,7 +11,7 @@ use uuid::Uuid;
 use windows::{
     Devices::{
         Bluetooth::{
-            BluetoothConnectionStatus, BluetoothLEDevice,
+            BluetoothCacheMode, BluetoothConnectionStatus, BluetoothLEDevice,
             GenericAttributeProfile::{
                 GattCharacteristic, GattCharacteristicProperties,
                 GattClientCharacteristicConfigurationDescriptorValue, GattCommunicationStatus,
@@ -168,6 +168,12 @@ impl Peripheral {
     }
 
     pub(in crate::ble) async fn discover_services(&self) -> Result<()> {
+        // Always force over-the-air discovery: Windows keeps a persistent
+        // GATT cache per bonded device and serves stale attribute handles
+        // and CCCD state from it long after the remote has rebooted.
+        // Subscribing through cached handles reports success while the
+        // remote never actually enables notifications, which muted the
+        // ATVV stream until the cache was rebuilt by re-pairing.
         let mut characteristics = query_characteristics(&self.service).await?;
         for (service_uuid, characteristic_uuid) in [
             (DEVICE_INFORMATION_SERVICE_UUID, MODEL_NUMBER_UUID),
@@ -191,7 +197,10 @@ impl Peripheral {
     ) -> Option<Characteristic> {
         let result = self
             .device
-            .GetGattServicesForUuidAsync(to_guid(service_uuid))
+            .GetGattServicesForUuidWithCacheModeAsync(
+                to_guid(service_uuid),
+                BluetoothCacheMode::Uncached,
+            )
             .ok()?
             .await
             .ok()?;
@@ -334,7 +343,7 @@ impl Peripheral {
 
 async fn query_characteristics(service: &GattDeviceService) -> Result<Vec<Characteristic>> {
     let result = service
-        .GetCharacteristicsAsync()
+        .GetCharacteristicsWithCacheModeAsync(BluetoothCacheMode::Uncached)
         .context("无法开始枚举 GATT 特征")?
         .await
         .context("无法枚举 GATT 特征")?;

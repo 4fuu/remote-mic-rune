@@ -76,6 +76,19 @@ impl VoiceRuntime {
                 let snapshot = Arc::clone(&snapshot);
                 let initial = initial.clone();
                 move || {
+                    // Claim the thread as MTA before anything else: cpal's
+                    // WASAPI host otherwise initializes it as STA, and an STA
+                    // thread that never pumps messages (the tokio loop below)
+                    // can never receive WinRT async-completion callbacks, so
+                    // every over-the-air GATT operation would hang forever.
+                    // cpal tolerates the resulting RPC_E_CHANGED_MODE.
+                    #[cfg(target_os = "windows")]
+                    unsafe {
+                        let _ = windows::Win32::System::Com::CoInitializeEx(
+                            None,
+                            windows::Win32::System::Com::COINIT_MULTITHREADED,
+                        );
+                    }
                     let runtime = tokio::runtime::Builder::new_current_thread()
                         .enable_all()
                         .build()
