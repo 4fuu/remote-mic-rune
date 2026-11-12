@@ -20,6 +20,21 @@ channel, and makes all 13 buttons programmable:
   channel sees them; owning them requires the report layer, which is exactly
   where this project works.
 
+## Warning: anti-cheat may flag this as cheating
+
+This app works by injecting a DLL into a Windows system process, hooking a
+low-level NT API inside it, and replaying input through `SendInput`. Those
+are the same techniques cheat software uses. Kernel anti-cheat systems
+(Vanguard, EAC, BattlEye, FACEIT, Ricochet, …) may flag the injection or
+the synthetic input — some titles detect `SendInput` alone — and a
+detection can end in an **account ban**.
+
+The agent hooks `WUDFHost.exe` (the HID device host), never a game
+process, and capture is fail-open, but none of that guarantees a clean
+verdict from an anti-cheat. Before launching a protected game, stop the
+helper and turn capture off (*Capture → Enhanced capture*). Use at your
+own risk; the author takes no responsibility for banned accounts.
+
 ## How it works
 
 ```
